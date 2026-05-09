@@ -1,8 +1,20 @@
 require("dotenv").config();
 
+const express = require("express");
 const fs = require("fs");
 const axios = require("axios");
 const { io } = require("socket.io-client");
+
+const app = express();
+const PORT = process.env.PORT || 10000;
+
+app.get("/", (req, res) => {
+  res.send("Groic bot is running");
+});
+
+app.listen(PORT, "0.0.0.0", () => {
+  console.log(`Health server running on port ${PORT}`);
+});
 
 const ROOM_FILE = "room.json";
 
