@@ -5,16 +5,33 @@ const fs = require("fs");
 const axios = require("axios");
 const { io } = require("socket.io-client");
 
+// =======================
+// Health Server
+// Required for Render/Replit Web Service
+// =======================
+
 const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get("/", (req, res) => {
-  res.send("Groic bot is running");
+  res.status(200).send("Groic bot is running");
+});
+
+app.get("/health", (req, res) => {
+  res.status(200).json({
+    status: "ok",
+    botRunning: Boolean(socket && socket.connected),
+    roomUid: currentRoomUid || null
+  });
 });
 
 app.listen(PORT, "0.0.0.0", () => {
   console.log(`Health server running on port ${PORT}`);
 });
+
+// =======================
+// Config
+// =======================
 
 const ROOM_FILE = "room.json";
 
@@ -27,7 +44,6 @@ if (!FIREBASE_API_KEY || !REFRESH_TOKEN) {
 }
 
 const USER_ID = "ZD8n4XeV1Ad3R9EgyRa5ASa8S8s1";
-
 const OWNER_USERNAME = "kd_zoro";
 
 // Blank-looking bot identity
@@ -40,7 +56,6 @@ const ROOM_DESC =
 const ROOM_GENRE = ["KD-Special"];
 const MAX_PARTICIPANTS = 50;
 
-// Song data
 const SONG = {
   songurl: "QNYT9wVwQ8A",
   action: 1,
@@ -51,9 +66,28 @@ const SONG = {
   youtubePlayer: true
 };
 
+// =======================
+// Global State
+// =======================
+
 let TOKEN = "";
 let socket = null;
 let currentRoomUid = null;
+
+let tokenRefreshInterval = null;
+let userWatcherInterval = null;
+let keepAliveInterval = null;
+
+let botStarted = false;
+let isStarting = false;
+
+// =======================
+// Helpers
+// =======================
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
 
 function saveRoomUid(roomUid) {
   fs.writeFileSync(ROOM_FILE, JSON.stringify({ roomUid }, null, 2));
@@ -72,18 +106,79 @@ function loadRoomUid() {
   }
 }
 
+function isCloudflareChallenge(data) {
+  if (typeof data !== "string") return false;
+
+  return (
+    data.includes("Just a moment") ||
+    data.includes("challenges.cloudflare.com") ||
+    data.includes("__cf_chl") ||
+    data.includes("Enable JavaScript and cookies")
+  );
+}
+
+function logAxiosError(err, label = "Request failed") {
+  console.log(label);
+
+  if (err.response) {
+    console.log("Status:", err.response.status);
+
+    const data = err.response.data;
+
+    if (isCloudflareChallenge(data)) {
+      console.log("Cloudflare challenge detected. Server IP is likely blocked/challenged.");
+      return;
+    }
+
+    if (typeof data === "string") {
+      console.log("Response:", data.slice(0, 500));
+    } else {
+      console.log("Response:", JSON.stringify(data, null, 2));
+    }
+  } else {
+    console.log("Error:", err.message);
+  }
+}
+
+function cleanupRuntime() {
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+  }
+
+  if (userWatcherInterval) {
+    clearInterval(userWatcherInterval);
+    userWatcherInterval = null;
+  }
+
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+
+  botStarted = false;
+}
+
 function getGroicHeaders() {
   return {
-    accept: "*/*",
+    accept: "application/json, text/plain, */*",
     authorization: TOKEN,
     "content-type": "application/json",
     origin: "https://groic.in",
     referer: "https://groic.in/",
+    "accept-language": "en-US,en;q=0.9",
+    "cache-control": "no-cache",
+    pragma: "no-cache",
     "user-agent":
       "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
     "x-device-type": "android"
   };
 }
+
+// =======================
+// Firebase Token
+// =======================
 
 async function refreshAccessToken() {
   const url = `https://securetoken.googleapis.com/v1/token?key=${FIREBASE_API_KEY}`;
@@ -95,7 +190,8 @@ async function refreshAccessToken() {
   const res = await axios.post(url, params.toString(), {
     headers: {
       "content-type": "application/x-www-form-urlencoded"
-    }
+    },
+    timeout: 20000
   });
 
   TOKEN = res.data.id_token || res.data.access_token;
@@ -115,6 +211,25 @@ async function refreshAccessToken() {
   return TOKEN;
 }
 
+function startTokenRefreshLoop() {
+  if (tokenRefreshInterval) {
+    return;
+  }
+
+  tokenRefreshInterval = setInterval(async () => {
+    try {
+      await refreshAccessToken();
+      console.log("Token refreshed successfully");
+    } catch (err) {
+      console.log("Token refresh failed:", err.message);
+    }
+  }, 50 * 60 * 1000);
+}
+
+// =======================
+// Groic API
+// =======================
+
 async function createRoom() {
   const payload = {
     roomOwner: USER_ID,
@@ -128,36 +243,36 @@ async function createRoom() {
   };
 
   const res = await axios.post("https://api.groic.in/api/room/", payload, {
-    headers: getGroicHeaders()
+    headers: getGroicHeaders(),
+    timeout: 30000
   });
 
-  return res.data.data.roomUid;
+  const roomUid = res?.data?.data?.roomUid;
+
+  if (!roomUid) {
+    throw new Error("Room created but roomUid not found in response");
+  }
+
+  return roomUid;
 }
 
 async function getRoomDetails(roomUid) {
   try {
     const res = await axios.get(`https://api.groic.in/api/room/${roomUid}`, {
-      headers: getGroicHeaders()
+      headers: getGroicHeaders(),
+      timeout: 30000
     });
-
-    // Debug logs. Uncomment when needed.
-    // console.log("ROOM DETAILS:");
-    // console.log(JSON.stringify(res.data, null, 2));
 
     return res.data.data;
   } catch (err) {
-    console.log("Could not fetch room details");
-
-    if (err.response) {
-      console.log("Status:", err.response.status);
-      // console.log("Response:", err.response.data);
-    } else {
-      console.log(err.message);
-    }
-
+    logAxiosError(err, "Could not fetch room details");
     return null;
   }
 }
+
+// =======================
+// Bot Actions
+// =======================
 
 function autoPlaySong() {
   setTimeout(() => {
@@ -167,7 +282,6 @@ function autoPlaySong() {
     }
 
     socket.emit("playSong", SONG);
-
     console.log("Auto playSong sent:", SONG.title);
   }, 8000);
 }
@@ -179,11 +293,8 @@ function sendChatMessage(message) {
   }
 
   socket.emit("sendChat", {
-    message: message
+    message
   });
-
-  // Debug log. Uncomment when needed.
-  // console.log("sendChat emitted:", message);
 }
 
 function isBotUser(user) {
@@ -195,12 +306,17 @@ function isBotUser(user) {
 }
 
 function startUserJoinWatcher(roomUid) {
+  if (userWatcherInterval) {
+    clearInterval(userWatcherInterval);
+    userWatcherInterval = null;
+  }
+
   const knownUsers = new Set();
   let firstScan = true;
 
   console.log("User watcher started");
 
-  setInterval(async () => {
+  userWatcherInterval = setInterval(async () => {
     try {
       const room = await getRoomDetails(roomUid);
 
@@ -210,16 +326,6 @@ function startUserJoinWatcher(roomUid) {
       }
 
       const activeUsers = room.activeUsers || [];
-
-      // Debug log. Uncomment when needed.
-      // console.log(
-      //   "Active users:",
-      //   activeUsers.map((u) => ({
-      //     username: u.username,
-      //     name: u.name,
-      //     imageUrl: u.imageUrl
-      //   }))
-      // );
 
       for (const user of activeUsers) {
         const username = user.username || "";
@@ -239,9 +345,7 @@ function startUserJoinWatcher(roomUid) {
           if (!firstScan) {
             const cleanUsername = username.trim() || "user";
 
-            sendChatMessage(
-              `KD : Welcome ${cleanUsername}! Enjoy the music 🎶`
-            );
+            sendChatMessage(`KD : Welcome ${cleanUsername}! Enjoy the music 🎶`);
           }
         }
       }
@@ -253,54 +357,61 @@ function startUserJoinWatcher(roomUid) {
   }, 10000);
 }
 
+function startKeepAlive(roomUid) {
+  if (keepAliveInterval) {
+    clearInterval(keepAliveInterval);
+    keepAliveInterval = null;
+  }
+
+  keepAliveInterval = setInterval(() => {
+    if (socket && socket.connected) {
+      socket.emit("requestSync", {
+        roomUid
+      });
+    }
+  }, 30000);
+}
+
 function joinRoom(roomUid) {
-  let watcherStarted = false;
+  if (socket) {
+    socket.removeAllListeners();
+    socket.disconnect();
+    socket = null;
+  }
 
   socket = io("https://socket-v2.groic.in", {
     transports: ["websocket"],
-
     auth: {
       Authorization: TOKEN
     },
-
     reconnection: true,
     reconnectionAttempts: Infinity,
-    reconnectionDelay: 3000
+    reconnectionDelay: 3000,
+    timeout: 30000
   });
 
   socket.on("connect", () => {
     console.log("Socket connected:", socket.id);
 
     socket.emit("joinRoom", {
-      roomUid: roomUid,
+      roomUid,
       username: BOT_USERNAME,
       name: BOT_NAME
     });
 
     console.log("BOT JOINED ROOM:", roomUid);
 
-    // Debug room check after joining. Uncomment when needed.
-    // setTimeout(async () => {
-    //   await getRoomDetails(roomUid);
-    // }, 10000);
-
-    if (!watcherStarted) {
-      startUserJoinWatcher(roomUid);
-      watcherStarted = true;
-    }
-
+    startUserJoinWatcher(roomUid);
+    startKeepAlive(roomUid);
     autoPlaySong();
   });
 
   socket.on("roomState", () => {
-    // Debug log. Uncomment when needed.
     // console.log("ROOM STATE RECEIVED");
   });
 
-  socket.on("chat", (data) => {
-    // Debug log. Uncomment when needed.
-    // console.log("CHAT RECEIVED FROM SERVER:");
-    // console.log(JSON.stringify(data, null, 2));
+  socket.on("chat", () => {
+    // console.log("CHAT RECEIVED");
   });
 
   socket.on("disconnect", (reason) => {
@@ -310,91 +421,139 @@ function joinRoom(roomUid) {
   socket.on("connect_error", (err) => {
     console.log("Socket error:", err.message);
   });
-
-  setInterval(() => {
-    if (socket && socket.connected) {
-      socket.emit("requestSync", {
-        roomUid: roomUid
-      });
-
-      // Debug log. Uncomment when needed.
-      // console.log("Keepalive sent");
-    }
-  }, 30000);
 }
 
+// =======================
+// Main Bot Startup
+// =======================
+
 async function startBot() {
-  await refreshAccessToken();
+  if (isStarting) {
+    console.log("Bot startup already in progress");
+    return;
+  }
 
-  const savedRoomUid = loadRoomUid();
+  if (botStarted) {
+    console.log("Bot already started");
+    return;
+  }
 
-  if (savedRoomUid) {
-    console.log("FOUND SAVED ROOM");
-    console.log("Room UID:", savedRoomUid);
+  isStarting = true;
 
-    const roomDetails = await getRoomDetails(savedRoomUid);
+  try {
+    cleanupRuntime();
 
-    if (roomDetails) {
-      currentRoomUid = savedRoomUid;
+    await refreshAccessToken();
 
-      console.log("USING SAVED ROOM");
-      console.log("Room UID:", currentRoomUid);
-      console.log(
-        "Room Link:",
-        `https://groic.in/room/${currentRoomUid}?autoJoin=true`
-      );
+    const savedRoomUid = loadRoomUid();
+
+    if (savedRoomUid) {
+      console.log("FOUND SAVED ROOM");
+      console.log("Room UID:", savedRoomUid);
+
+      const roomDetails = await getRoomDetails(savedRoomUid);
+
+      if (roomDetails) {
+        currentRoomUid = savedRoomUid;
+
+        console.log("USING SAVED ROOM");
+        console.log("Room UID:", currentRoomUid);
+        console.log(
+          "Room Link:",
+          `https://groic.in/room/${currentRoomUid}?autoJoin=true`
+        );
+      } else {
+        console.log("Saved room not found or blocked. Creating new room...");
+
+        currentRoomUid = await createRoom();
+        saveRoomUid(currentRoomUid);
+
+        console.log("NEW PUBLIC ROOM CREATED");
+        console.log("Room UID:", currentRoomUid);
+        console.log(
+          "Room Link:",
+          `https://groic.in/room/${currentRoomUid}?autoJoin=true`
+        );
+      }
     } else {
-      console.log("Saved room not found on Groic. Creating new room...");
-
       currentRoomUid = await createRoom();
       saveRoomUid(currentRoomUid);
 
-      console.log("NEW PUBLIC ROOM CREATED");
+      console.log("PUBLIC ROOM CREATED");
       console.log("Room UID:", currentRoomUid);
       console.log(
         "Room Link:",
         `https://groic.in/room/${currentRoomUid}?autoJoin=true`
       );
     }
-  } else {
-    currentRoomUid = await createRoom();
-    saveRoomUid(currentRoomUid);
 
-    console.log("PUBLIC ROOM CREATED");
-    console.log("Room UID:", currentRoomUid);
-    console.log(
-      "Room Link:",
-      `https://groic.in/room/${currentRoomUid}?autoJoin=true`
-    );
+    joinRoom(currentRoomUid);
+
+    startTokenRefreshLoop();
+
+    botStarted = true;
+
+    console.log("Bot is running. Do not close this terminal.");
+  } finally {
+    isStarting = false;
   }
-
-  joinRoom(currentRoomUid);
-
-  console.log("Bot is running. Do not close this terminal.");
 }
 
-function refreshTokenLoop() {
-  setInterval(async () => {
+// =======================
+// Run Forever
+// =======================
+
+async function runForever() {
+  while (true) {
     try {
-      await refreshAccessToken();
-      console.log("Token refreshed successfully");
+      await startBot();
+
+      // If startBot succeeds, keep process alive.
+      // Socket reconnect logic handles normal disconnects.
+      break;
     } catch (err) {
-      console.log("Token refresh failed:", err.message);
+      cleanupRuntime();
+
+      console.log("BOT FAILED");
+
+      if (err.response) {
+        console.log("Status:", err.response.status);
+
+        if (isCloudflareChallenge(err.response.data)) {
+          console.log("Cloudflare challenge detected. This host/IP may be blocked.");
+        } else if (typeof err.response.data === "string") {
+          console.log("Response:", err.response.data.slice(0, 500));
+        } else {
+          console.log("Response:", JSON.stringify(err.response.data, null, 2));
+        }
+      } else {
+        console.log("Error:", err.message);
+      }
+
+      console.log("Retrying in 5 minutes...");
+      await sleep(5 * 60 * 1000);
     }
-  }, 50 * 60 * 1000);
+  }
 }
 
-startBot()
-  .then(() => {
-    refreshTokenLoop();
-  })
-  .catch((err) => {
-    console.log("BOT FAILED");
+process.on("SIGINT", () => {
+  console.log("SIGINT received. Shutting down...");
+  cleanupRuntime();
+  process.exit(0);
+});
 
-    if (err.response) {
-      console.log("Status:", err.response.status);
-      console.log("Response:", err.response.data);
-    } else {
-      console.log(err.message);
-    }
-  });
+process.on("SIGTERM", () => {
+  console.log("SIGTERM received. Shutting down...");
+  cleanupRuntime();
+  process.exit(0);
+});
+
+process.on("unhandledRejection", (reason) => {
+  console.log("Unhandled rejection:", reason);
+});
+
+process.on("uncaughtException", (err) => {
+  console.log("Uncaught exception:", err.message);
+});
+
+runForever();
