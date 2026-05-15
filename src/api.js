@@ -2,6 +2,10 @@ const axios = require("axios");
 const { getToken } = require("./auth");
 const { USER_ID, OWNER_USERNAME, ROOM_NAME, ROOM_DESC, ROOM_GENRE, MAX_PARTICIPANTS } = require("../config/constants");
 const { logAxiosError } = require("./helpers");
+const { HttpsProxyAgent } = require("https-proxy-agent");
+
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;
+const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
 function getGroicHeaders() {
   return {
@@ -33,6 +37,7 @@ async function createRoom() {
 
   const res = await axios.post("https://api.groic.in/api/room/", payload, {
     headers: getGroicHeaders(),
+    ...(httpsAgent ? { httpsAgent } : {}),
     timeout: 30000
   });
 
@@ -49,6 +54,7 @@ async function getRoomDetails(roomUid) {
   try {
     const res = await axios.get(`https://api.groic.in/api/room/${roomUid}`, {
       headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
       timeout: 30000
     });
 
