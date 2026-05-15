@@ -11,9 +11,14 @@ function connectSocket(url, onConnect, onDisconnect, onError) {
   }
 
   socket = io(url, {
-    transports: ["websocket"],
+    transports: ["polling", "websocket"], // polling first so Cloudflare doesn't block WS upgrade
     auth: {
       Authorization: getToken()
+    },
+    extraHeaders: {
+      "Origin": "https://groic.in",
+      "Referer": "https://groic.in/",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
     },
     reconnection: true,
     reconnectionAttempts: Infinity,
