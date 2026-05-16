@@ -114,10 +114,16 @@ async function runForever() {
   // console.log("Starting persistence loop...");
   while (true) {
     try {
-      const state = getBotState();
-      if (!state.botRunning) {
-        console.log("Bot not running. Attempting to start/restart...");
+      const socket = getSocket();
+      const isConnected = socket && socket.connected;
+      const isReconnecting = socket && !socket.connected && socket.active;
+
+      if (!isConnected && !isReconnecting) {
+        // Only force a full restart if socket.io is NOT already trying to reconnect
+        console.log("Bot not running and not reconnecting. Attempting full restart...");
         await startBot();
+      } else if (isReconnecting) {
+        console.log("Socket is reconnecting... letting socket.io handle it.");
       }
     } catch (err) {
       console.log("Error in runForever loop:", err.message);

@@ -17,7 +17,7 @@ function connectSocket(url, onConnect, onDisconnect, onError) {
   const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   socket = io(url, {
-    transports: ["polling", "websocket"],
+    transports: ["websocket", "polling"], // prefer websocket to avoid polling→upgrade blip
     auth: {
       Authorization: getToken()
     },

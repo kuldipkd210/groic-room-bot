@@ -68,6 +68,9 @@ function startUserJoinWatcher(roomUid) {
   const socket = getSocket();
   if (!socket) return;
 
+  // Remove old listener first to prevent duplicates on reconnect
+  socket.off("presenceUpdate");
+
   // presenceUpdate fires whenever room membership changes (join / leave)
   socket.on("presenceUpdate", (data) => {
     const activeUsers = data?.activeUsers || [];
@@ -105,6 +108,7 @@ function stopHandlers() {
 function setupChatHandler(roomUid) {
   const socket = getSocket();
   if (socket) {
+    socket.off("chat"); // remove old listener before re-adding (prevents duplicates on reconnect)
     socket.on("chat", (data) => {
       // console.log("CHAT RECEIVED:", JSON.stringify(data));
     });
