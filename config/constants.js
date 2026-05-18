@@ -3,7 +3,7 @@ module.exports = {
   OWNER_USERNAME: "kd_zoro",
   BOT_USERNAME: " ",
   BOT_NAME: " ",
-  ROOM_NAME: "01001011 01000100",
+  ROOM_NAME: "Testing Room",
   ROOM_DESC: "⚠️ TAMIL AND TELUGU ARE STRICTLY PROHIBITED!",
   ROOM_GENRE: ["KD-Special"],
   MAX_PARTICIPANTS: 50,
