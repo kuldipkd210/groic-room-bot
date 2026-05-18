@@ -172,11 +172,11 @@ function setupChatHandler(roomUid) {
         }
 
         // B. If it has plain text -> Translate the typed text directly
-        sendChatMessage(`KD : ⏳ Translating...`, roomUid);
+        sendChatMessage(`KD : Translating...`, roomUid);
         const translated = await translateToEnglish(arg);
 
         if (translated) {
-          sendChatMessage(`KD : 🌐 : ${translated}`, roomUid);
+          sendChatMessage(`KD : ${translated}`, roomUid);
         } else {
           sendChatMessage(`KD : Translation Unavailable`, roomUid);
         }

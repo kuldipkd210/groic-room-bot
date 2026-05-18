@@ -1,8 +1,69 @@
 const axios = require("axios");
 const { GEMINI_API_KEY } = require("../config/env");
+const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const GEMINI_URL =
-  "https://generativelanguage.googleapis.com/v1beta/models/gemini-flash-latest:generateContent";
+  "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent";
+
+// Setup Proxy Agent matching api.js and socket.js
+const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;
+const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+
+// Helper to sleep/wait
+const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
+
+/**
+ * Generic helper to post to Gemini API with exponential backoff retries and optional proxy.
+ *
+ * @param {object} payload - The request body
+ * @returns {Promise<object>} - Axios response
+ */
+async function callGemini(payload) {
+  const maxRetries = 3;
+  let delay = 2000; // Start with 2 seconds delay
+
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      const config = {
+        headers: { "Content-Type": "application/json" },
+        timeout: 15000,
+        ...(httpsAgent ? { httpsAgent } : {})
+      };
+
+      const res = await axios.post(
+        `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
+        payload,
+        config
+      );
+
+      return res;
+    } catch (err) {
+      const status = err?.response?.status;
+      const errorMsg = err?.response?.data?.error?.message || err.message;
+      const errorCode = err?.response?.data?.error?.status || "UNKNOWN";
+
+      console.log(
+        `[Translate] Gemini API attempt ${attempt} failed (Status: ${status || "No Response"}, Error: ${errorMsg}, Code: ${errorCode})`
+      );
+
+      // Only retry on rate limits (429) or transient server errors (5xx)
+      const isRateLimit = status === 429;
+      const isServerError = status >= 500 && status < 600;
+
+      if ((isRateLimit || isServerError) && attempt < maxRetries) {
+        console.log(`[Translate] Retrying in ${delay}ms...`);
+        await sleep(delay);
+        delay *= 2; // Exponential backoff
+      } else {
+        // Log detailed payload if it's a permanent failure
+        if (err.response && err.response.data) {
+          console.log("[Translate] Detailed API Error Response:", JSON.stringify(err.response.data, null, 2));
+        }
+        throw err;
+      }
+    }
+  }
+}
 
 /**
  * Translates the given text to English using Gemini AI.
@@ -28,27 +89,20 @@ async function translateToEnglish(text) {
   ].join("\n");
 
   try {
-    const res = await axios.post(
-      `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
-      {
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ]
-      },
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 15000
-      }
-    );
+    const res = await callGemini({
+      contents: [
+        {
+          parts: [{ text: prompt }]
+        }
+      ]
+    });
 
     const translated =
       res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
 
     return translated || null;
   } catch (err) {
-    console.log("[Translate] Gemini API error:", err?.response?.data?.error?.message || err.message);
+    // Already logged in callGemini helper
     return null;
   }
 }
@@ -57,7 +111,7 @@ async function translateToEnglish(text) {
  * Translates an array of chat messages to English in a single API call using Gemini JSON mode.
  *
  * @param {string[]} texts - Array of texts to translate
- * @returns {Promise<string[]|null>} - Array of translated texts in the same order
+ * @returns {Promise<string[]|null>} - Array of translated texts in the exact same order
  */
 async function translateArrayOfTexts(texts) {
   if (!GEMINI_API_KEY) {
@@ -75,23 +129,16 @@ async function translateArrayOfTexts(texts) {
   ].join("\n");
 
   try {
-    const res = await axios.post(
-      `${GEMINI_URL}?key=${GEMINI_API_KEY}`,
-      {
-        contents: [
-          {
-            parts: [{ text: prompt }]
-          }
-        ],
-        generationConfig: {
-          responseMimeType: "application/json"
+    const res = await callGemini({
+      contents: [
+        {
+          parts: [{ text: prompt }]
         }
-      },
-      {
-        headers: { "Content-Type": "application/json" },
-        timeout: 15000
+      ],
+      generationConfig: {
+        responseMimeType: "application/json"
       }
-    );
+    });
 
     let responseText = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
 
@@ -105,7 +152,7 @@ async function translateArrayOfTexts(texts) {
     }
     return null;
   } catch (err) {
-    console.log("[Translate] Array translation error:", err?.response?.data?.error?.message || err.message);
+    // Already logged in callGemini helper
     return null;
   }
 }
