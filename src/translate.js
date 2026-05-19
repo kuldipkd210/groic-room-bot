@@ -82,10 +82,12 @@ async function translateToEnglish(text) {
   }
 
   const prompt = [
-    "You are a translator bot. The user will give you a chat message that may be in any language",
-    "or a mix of languages (e.g. Tanglish = Tamil + English, Hinglish = Hindi + English, etc.).",
-    "Translate the ENTIRE message into clear, natural English.",
-    "Only return the translated text — no explanations, no extra text, no quotation marks.",
+    "You are an expert, native-level translator bot specializing in regional Indian languages.",
+    "The user will give you a chat message that may be in any language or a mix of languages (e.g., Tanglish = Tamil + English, Hinglish).",
+    "It often contains casual native village slangs and regional dialects (like deeply spoken Tamil slangs). You MUST understand the deep contextual and cultural meaning of these words.",
+    "First, carefully analyze the message, identifying any slangs, context, and idioms. Write your analysis inside <think> tags.",
+    "Then, provide ONLY the final translated English text after the </think> tag.",
+    "Translate the ENTIRE message into clear, natural, and conversational English that preserves the original tone.",
     "",
     `Message: ${text}`
   ].join("\n");
@@ -102,8 +104,10 @@ async function translateToEnglish(text) {
       temperature: 0.1
     });
 
-    const translated =
-      res?.data?.choices?.[0]?.message?.content?.trim();
+    let translated = res?.data?.choices?.[0]?.message?.content?.trim();
+    if (translated) {
+      translated = translated.replace(/<think>[\s\S]*?<\/think>/gi, '').trim();
+    }
 
     return translated || null;
   } catch (err) {
@@ -125,11 +129,13 @@ async function translateArrayOfTexts(texts) {
   }
 
   const prompt = [
-    "You are a translator bot. The user will provide a JSON array of chat messages.",
-    "Translate each message into clear, natural English.",
-    "Return the result strictly as a valid JSON object with a single key 'translations' whose value is a JSON array of translated strings in the exact same order.",
+    "You are an expert, native-level translator bot specializing in regional Indian languages and village dialects.",
+    "The user will provide a JSON array of chat messages, which may contain casual native slangs (like spoken Tamil or Tanglish).",
+    "First, inside the JSON object, add a key 'analysis' containing a JSON array with your thought process for each message, breaking down the slangs and regional dialects.",
+    "Then, add a key 'translations' whose value is a JSON array of the final translated strings in the exact same order.",
+    "Return the result strictly as a valid JSON object.",
     "Example format:",
-    "{\"translations\": [\"translation1\", \"translation2\"]}",
+    "{\"analysis\": [\"thought process 1\"], \"translations\": [\"translation1\"]}",
     "",
     `Messages: ${JSON.stringify(texts)}`
   ].join("\n");
