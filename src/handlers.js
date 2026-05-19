@@ -35,6 +35,7 @@ function isBotUser(user) {
 
 function processUserList(activeUsers, roomUid) {
   const currentActiveKeys = new Set();
+  let selfFound = false;
 
   for (const user of activeUsers) {
     const username = user.username || "";
@@ -45,6 +46,7 @@ function processUserList(activeUsers, roomUid) {
     currentActiveKeys.add(userKey);
 
     if (isBotUser(user)) {
+      selfFound = true;
       knownUsers.add(userKey);
       continue;
     }
@@ -62,6 +64,22 @@ function processUserList(activeUsers, roomUid) {
   for (const knownKey of knownUsers) {
     if (!currentActiveKeys.has(knownKey)) {
       knownUsers.delete(knownKey);
+    }
+  }
+
+  // Self-healing: If the bot has been initialized but is no longer found in the active users list,
+  // it has been disconnected or removed (e.g. due to an old Render instance shutting down). Re-join!
+  if (initialized && !selfFound) {
+    console.log("[Handlers] Bot is not in active users list. Attempting to rejoin room...");
+    const socket = getSocket();
+    if (socket && socket.connected) {
+      socket.emit("joinRoom", {
+        roomUid: roomUid,
+        username: BOT_USERNAME,
+        name: BOT_NAME,
+        imageUrl: "",
+        isBot: true
+      });
     }
   }
 }
