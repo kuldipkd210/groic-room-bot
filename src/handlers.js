@@ -1,6 +1,7 @@
 const { getSocket, emit } = require("./socket");
 const { SONG, BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
+const { askAi } = require("./ask");
 
 let keepAliveInterval = null;
 let knownUsers = new Set();
@@ -197,6 +198,25 @@ function setupChatHandler(roomUid) {
           sendChatMessage(`KD : ${translated}`, roomUid);
         } else {
           sendChatMessage(`KD : Translation Unavailable`, roomUid);
+        }
+      } else if (message.toLowerCase().startsWith("!ask") || message.toLowerCase().startsWith("! ask")) {
+        let arg = "";
+        if (message.toLowerCase().startsWith("!ask")) {
+          arg = message.slice("!ask".length).trim();
+        } else {
+          arg = message.slice("! ask".length).trim();
+        }
+
+        if (!arg) {
+          sendChatMessage(`KD : @${senderUsername} Please provide a question or prompt after !ask.`, roomUid);
+        } else {
+          sendChatMessage(`KD : ⏳ Thinking...`, roomUid);
+          const answer = await askAi(arg);
+          if (answer) {
+            sendChatMessage(`KD : ${answer}`, roomUid);
+          } else {
+            sendChatMessage(`KD : I couldn't get an answer right now.`, roomUid);
+          }
         }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
