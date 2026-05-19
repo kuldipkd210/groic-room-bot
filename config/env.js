@@ -2,7 +2,8 @@ require("dotenv").config({ override: true });
 
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
+const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
+const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.1-8b-instant";
 const PORT = process.env.PORT || 10000;
 const ROOM_UID = process.env.ROOM_UID || null; // Set this on Render to skip HTTP room creation
 
@@ -14,7 +15,8 @@ if (!FIREBASE_API_KEY || !REFRESH_TOKEN) {
 module.exports = {
   FIREBASE_API_KEY,
   REFRESH_TOKEN,
-  GEMINI_API_KEY,
+  GROQ_API_KEY,
+  GROQ_MODEL,
   PORT,
   ROOM_UID
 };
