@@ -14,7 +14,8 @@ async function refreshAccessToken() {
     headers: {
       "content-type": "application/x-www-form-urlencoded"
     },
-    timeout: 20000
+    timeout: 20000,
+    proxy: false
   });
 
   TOKEN = res.data.id_token || res.data.access_token;

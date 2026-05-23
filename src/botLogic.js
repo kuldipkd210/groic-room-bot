@@ -11,6 +11,7 @@ let currentRoomUid = null;
 let botStarted = false;
 let isStarting = false;
 let tokenRefreshInterval = null;
+let reconnectingChecks = 0;
 
 function cleanupRuntime() {
   const socket = getSocket();
@@ -43,34 +44,31 @@ async function startBot() {
     cleanupRuntime();
     await refreshAccessToken();
 
-    // If ROOM_UID is set in env (e.g. on Render), skip all HTTP calls to api.groic.in
-    // This bypasses Cloudflare which blocks data center IPs like Render's
-    if (ENV_ROOM_UID) {
-      currentRoomUid = ENV_ROOM_UID;
-      console.log("Using ROOM_UID from environment:", currentRoomUid);
-    } else {
-      const savedRoomUid = currentRoomUid || loadRoomUid();
-      if (savedRoomUid) {
-        currentRoomUid = savedRoomUid;
-        console.log("USING EXISTING ROOM:", currentRoomUid);
+    const isRender = !!process.env.RENDER || !!process.env.RENDER_EXTERNAL_URL;
+    const savedRoomUid = isRender
+      ? (currentRoomUid || ENV_ROOM_UID || loadRoomUid())
+      : (currentRoomUid || loadRoomUid() || ENV_ROOM_UID);
 
-        try {
-          const roomDetails = await getRoomDetails(currentRoomUid);
-          if (!roomDetails) {
-            console.log("Room no longer exists. Creating a fresh one...");
-            currentRoomUid = await createRoom();
-            saveRoomUid(currentRoomUid);
-          } else {
-            console.log("Room verified and active.");
-          }
-        } catch (err) {
-          console.log("Network error while verifying room. Will attempt to join existing UID anyway.");
+    if (savedRoomUid) {
+      currentRoomUid = savedRoomUid;
+      console.log(isRender ? `[Render] USING EXISTING ROOM: ${currentRoomUid}` : `[Local] USING EXISTING ROOM: ${currentRoomUid}`);
+
+      try {
+        const roomDetails = await getRoomDetails(currentRoomUid);
+        if (!roomDetails) {
+          console.log("Room no longer exists. Creating a fresh one...");
+          currentRoomUid = await createRoom();
+          saveRoomUid(currentRoomUid);
+        } else {
+          console.log("Room verified and active.");
         }
-      } else {
-        console.log("No saved room found. Creating new...");
-        currentRoomUid = await createRoom();
-        saveRoomUid(currentRoomUid);
+      } catch (err) {
+        console.log("Network error while verifying room. Will attempt to join existing UID anyway.");
       }
+    } else {
+      console.log("No saved room or environment ROOM_UID found. Creating new...");
+      currentRoomUid = await createRoom();
+      saveRoomUid(currentRoomUid);
     }
 
     console.log("Room Link:", `https://groic.in/room/${currentRoomUid}?autoJoin=true`);
@@ -99,7 +97,18 @@ async function startBot() {
         console.log("Socket disconnected:", reason);
         botStarted = false; // Allow runForever to detect failure
       },
-      (err) => console.log("Socket error:", err.message)
+      async (err) => {
+        console.log("Socket error:", err.message);
+        if (err.message && (err.message.toLowerCase().includes("auth") || err.message.toLowerCase().includes("token") || err.message.toLowerCase().includes("unauthorized"))) {
+          console.log("Auth error detected, attempting to refresh token...");
+          try {
+            const newToken = await refreshAccessToken();
+            updateSocketAuth(newToken);
+          } catch (refreshErr) {
+            console.log("Failed to refresh token on socket error:", refreshErr.message);
+          }
+        }
+      }
     );
 
     startTokenRefreshLoop();
@@ -118,12 +127,23 @@ async function runForever() {
       const isConnected = socket && socket.connected;
       const isReconnecting = socket && !socket.connected && socket.active;
 
+      if (isConnected) {
+        reconnectingChecks = 0;
+      }
+
       if (!isConnected && !isReconnecting) {
         // Only force a full restart if socket.io is NOT already trying to reconnect
         console.log("Bot not running and not reconnecting. Attempting full restart...");
+        reconnectingChecks = 0;
         await startBot();
       } else if (isReconnecting) {
-        console.log("Socket is reconnecting... letting socket.io handle it.");
+        reconnectingChecks++;
+        console.log(`Socket is reconnecting (consecutive checks: ${reconnectingChecks})...`);
+        if (reconnectingChecks >= 3) {
+          console.log("Socket stuck in reconnecting state for too long. Forcing full restart...");
+          reconnectingChecks = 0;
+          await startBot();
+        }
       }
     } catch (err) {
       console.log("Error in runForever loop:", err.message);

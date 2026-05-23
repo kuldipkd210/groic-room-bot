@@ -1,5 +1,5 @@
 const axios = require("axios");
-const { GROQ_API_KEY, GROQ_MODEL } = require("../config/env");
+const { GROQ_API_KEY, GROQ_MODEL, GEMINI_API_KEY, GEMINI_MODEL } = require("../config/env");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
@@ -68,16 +68,84 @@ async function callGroq(payload) {
 }
 
 /**
- * Translates the given text to English using Groq AI.
- * Handles mixed-language inputs like Tanglish (Tamil+English), Tenglish, etc.
- * Returns the translated English string, or null on failure.
+ * Helper to call Gemini API directly via HTTP (bypassing proxies as Google is not blocked).
+ *
+ * @param {string} prompt - The translation prompt
+ * @param {boolean} isJsonMode - Whether to return a JSON object
+ * @returns {Promise<object>} - Axios response
+ */
+async function callGemini(prompt, isJsonMode = false) {
+  const model = GEMINI_MODEL || "gemini-2.5-flash";
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent?key=${GEMINI_API_KEY}`;
+
+  const payload = {
+    contents: [
+      {
+        parts: [
+          {
+            text: prompt
+          }
+        ]
+      }
+    ],
+    generationConfig: {
+      temperature: 0.1,
+      ...(isJsonMode ? { responseMimeType: "application/json" } : {})
+    }
+  };
+
+  const config = {
+    headers: {
+      "Content-Type": "application/json"
+    },
+    timeout: 15000,
+    proxy: false
+  };
+
+  const res = await axios.post(url, payload, config);
+  return res;
+}
+
+/**
+ * Translates the given text to English using Gemini or Groq (fallback).
  *
  * @param {string} text - The message to translate
  * @returns {Promise<string|null>}
  */
 async function translateToEnglish(text) {
+  if (GEMINI_API_KEY) {
+    const prompt = [
+      "You are an expert, native-level translator bot specializing in regional Indian languages.",
+      "The user will give you a chat message that may be in any language or a mix of languages (e.g., Tanglish = Tamil + English, Hinglish, Tenglish).",
+      "It often contains casual native village slangs and regional dialects (like deeply spoken Tamil slangs). You MUST understand the deep contextual and cultural meaning of these words.",
+      "Translate the ENTIRE message into clear, natural, and conversational English that preserves the original tone. Return ONLY the final translated English text, without any explanations or tags.",
+      "",
+      `Message: ${text}`
+    ].join("\n");
+
+    try {
+      const res = await callGemini(prompt, false);
+      const translated = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim();
+      return translated || null;
+    } catch (err) {
+      console.log("[Translate] Gemini translation failed:", err.message);
+      // Fallback to Groq
+      if (GROQ_API_KEY) {
+        return translateToEnglishGroq(text);
+      }
+      return null;
+    }
+  }
+
+  return translateToEnglishGroq(text);
+}
+
+/**
+ * Translates the given text to English using Groq AI.
+ */
+async function translateToEnglishGroq(text) {
   if (!GROQ_API_KEY) {
-    console.log("[Translate] GROQ_API_KEY is not set in .env");
+    console.log("[Translate] Neither GEMINI_API_KEY nor GROQ_API_KEY is set.");
     return null;
   }
 
@@ -111,20 +179,67 @@ async function translateToEnglish(text) {
 
     return translated || null;
   } catch (err) {
-    // Already logged in callGroq helper
     return null;
   }
 }
 
 /**
- * Translates an array of chat messages to English in a single API call using Groq JSON mode.
+ * Translates an array of chat messages to English using Gemini or Groq (fallback).
  *
  * @param {string[]} texts - Array of texts to translate
  * @returns {Promise<string[]|null>} - Array of translated texts in the exact same order
  */
 async function translateArrayOfTexts(texts) {
+  if (GEMINI_API_KEY) {
+    const prompt = [
+      "You are an expert, native-level translator bot specializing in regional Indian languages and village dialects.",
+      "The user will provide a JSON array of chat messages, which may contain casual native slangs (like spoken Tamil or Tanglish).",
+      "Return a JSON object containing a 'translations' key whose value is a JSON array of the final translated strings in the exact same order.",
+      "Return the result strictly as a valid JSON object.",
+      "Example format:",
+      "{\"translations\": [\"translation1\"]}",
+      "",
+      `Messages: ${JSON.stringify(texts)}`
+    ].join("\n");
+
+    try {
+      const res = await callGemini(prompt, true);
+      let responseText = res?.data?.candidates?.[0]?.content?.parts?.[0]?.text?.trim() || "";
+
+      if (responseText.startsWith("```")) {
+        responseText = responseText.replace(/^```json\s*/i, "").replace(/```$/, "").trim();
+      }
+
+      const parsed = JSON.parse(responseText);
+      if (parsed && Array.isArray(parsed.translations)) {
+        return parsed.translations;
+      }
+
+      // In case the model returned a plain array despite prompt instructions
+      if (Array.isArray(parsed)) {
+        return parsed;
+      }
+
+      return null;
+    } catch (err) {
+      console.log("[Translate] Gemini array translation failed:", err.message);
+      // Fallback to Groq
+      if (GROQ_API_KEY) {
+        return translateArrayOfTextsGroq(texts);
+      }
+      return null;
+    }
+  }
+
+  return translateArrayOfTextsGroq(texts);
+}
+
+/**
+ * Translates an array of chat messages to English using Groq JSON mode.
+ */
+async function translateArrayOfTextsGroq(texts) {
   if (!GROQ_API_KEY) {
-    console.log("[Translate] GROQ_API_KEY is not set in .env");
+    console.log("[Translate] Neither GEMINI_API_KEY nor GROQ_API_KEY is set.");
     return null;
   }
 
