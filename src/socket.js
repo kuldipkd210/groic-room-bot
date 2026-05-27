@@ -17,14 +17,17 @@ function connectSocket(url, onConnect, onDisconnect, onError) {
   const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   socket = io(url, {
-    transports: ["websocket", "polling"], // prefer websocket to avoid polling→upgrade blip
+    transports: ["websocket"], // match web app strictly
     auth: {
       Authorization: getToken()
     },
     extraHeaders: {
       "Origin": "https://groic.in",
       "Referer": "https://groic.in/",
-      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36",
+      "Authorization": getToken(),
+      "x-app-version": "web",
+      "x-device-type": "web"
     },
     ...(agent ? { agent } : {}),
     reconnection: true,
@@ -58,7 +61,9 @@ function emit(event, data) {
 function updateSocketAuth(token) {
   if (socket) {
     socket.auth = { Authorization: token };
-    // console.log("Socket auth token updated for future reconnections");
+    if (socket.io && socket.io.opts && socket.io.opts.extraHeaders) {
+      socket.io.opts.extraHeaders.Authorization = token;
+    }
   }
 }
 
