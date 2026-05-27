@@ -4,7 +4,7 @@ module.exports = {
   BOT_USERNAME: " ",
   BOT_NAME: " ",
   ROOM_NAME: "01101011 01100100",
-  ROOM_DESC: "TAMIL AND TELUGU ARE STRICTLY PROHIBITED!",
+  ROOM_DESC: "There are 10 types of people: those who get it, and those who don’t!",
   ROOM_GENRE: ["KD-Special"],
   MAX_PARTICIPANTS: 50,
   SONG: {
