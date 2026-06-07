@@ -4,6 +4,28 @@ const { HttpsProxyAgent } = require("https-proxy-agent");
 
 let socket = null;
 
+function createSocketInstance(url, token) {
+  const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;
+  const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
+
+  return io(url, {
+    transports: ["websocket", "polling"],
+    auth: {
+      Authorization: token
+    },
+    extraHeaders: {
+      "Origin": "https://groic.in",
+      "Referer": "https://groic.in/",
+      "User-Agent": "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/147.0.0.0 Safari/537.36"
+    },
+    ...(agent ? { agent } : {}),
+    reconnection: true,
+    reconnectionAttempts: Infinity,
+    reconnectionDelay: 3000,
+    timeout: 30000
+  });
+}
+
 function connectSocket(url, onConnect, onDisconnect, onError) {
   if (socket) {
     socket.removeAllListeners();
@@ -71,5 +93,6 @@ module.exports = {
   connectSocket,
   getSocket,
   emit,
-  updateSocketAuth
+  updateSocketAuth,
+  createSocketInstance
 };

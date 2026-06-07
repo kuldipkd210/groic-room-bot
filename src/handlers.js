@@ -1,12 +1,110 @@
-const { getSocket, emit } = require("./socket");
+const { getSocket, emit, createSocketInstance } = require("./socket");
 const { SONG, BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
+const { updateRoomKickList, updateRoomAdminList, getRoomDetails } = require("./api");
+const { getToken } = require("./auth");
+const fs = require("fs");
+const path = require("path");
+
+const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
+
+function loadAllowedAdmins() {
+  const defaultAdmins = ["_darth_vader_", "dedsec_404", "_its_shru_"];
+  if (!fs.existsSync(ALLOWED_ADMINS_FILE)) {
+    return defaultAdmins.map(u => u.toLowerCase().trim());
+  }
+  try {
+    const list = JSON.parse(fs.readFileSync(ALLOWED_ADMINS_FILE, "utf8"));
+    if (Array.isArray(list)) {
+      return list.map(u => u.toLowerCase().trim());
+    }
+  } catch (err) {
+    console.error("Failed to load allowed_admins.json, using defaults", err);
+  }
+  return defaultAdmins.map(u => u.toLowerCase().trim());
+}
+
+function saveAllowedAdmins(adminsList) {
+  try {
+    fs.writeFileSync(ALLOWED_ADMINS_FILE, JSON.stringify(adminsList, null, 2));
+  } catch (err) {
+    console.error("Failed to save allowed_admins.json", err);
+  }
+}
 
 let keepAliveInterval = null;
 let knownUsers = new Set();
 let initialized = false; // true after first presenceUpdate processed
 let chatHistory = []; // Stores rolling { username, message } recent messages
+let currentAdmins = [];
+
+function isAllowedAdminUser(username) {
+  const normalized = (username || "").toLowerCase().trim();
+  if (normalized === OWNER_USERNAME.toLowerCase().trim()) return true;
+  const list = loadAllowedAdmins();
+  return list.includes(normalized);
+}
+
+function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
+  const token = getToken();
+  const socket = createSocketInstance("https://socket-v2.groic.in", token);
+
+  socket.on("connect", () => {
+    socket.emit("joinRoom", {
+      roomUid,
+      username: " ",
+      name: " ",
+      imageUrl: "",
+      isBot: false
+    });
+  });
+
+  socket.on("presenceUpdate", (data) => {
+    const activeAdmins = data?.admins || [];
+    const isCurrentlySocketAdmin = activeAdmins.includes(targetUsername);
+
+    if (targetIsAdmin !== isCurrentlySocketAdmin) {
+      socket.emit("addAdmin", targetUsername);
+    }
+    setTimeout(() => {
+      socket.disconnect();
+    }, 1000);
+  });
+
+  socket.on("connect_error", () => {
+    socket.disconnect();
+  });
+}
+
+function emitKickUserForRoom(roomUid, targetUsername, isKick) {
+  const token = getToken();
+  const socket = createSocketInstance("https://socket-v2.groic.in", token);
+
+  socket.on("connect", () => {
+    socket.emit("joinRoom", {
+      roomUid,
+      username: " ",
+      name: " ",
+      imageUrl: "",
+      isBot: false
+    });
+  });
+
+  socket.on("presenceUpdate", (data) => {
+    socket.emit("kickUser", {
+      username: targetUsername,
+      addOrRemove: isKick
+    });
+    setTimeout(() => {
+      socket.disconnect();
+    }, 1000);
+  });
+
+  socket.on("connect_error", () => {
+    socket.disconnect();
+  });
+}
 
 function autoPlaySong() {
   setTimeout(() => {
@@ -95,6 +193,7 @@ function startUserJoinWatcher(roomUid) {
   // presenceUpdate fires whenever room membership changes (join / leave)
   socket.on("presenceUpdate", (data) => {
     const activeUsers = data?.activeUsers || [];
+    currentAdmins = data?.admins || [];
     processUserList(activeUsers, roomUid);
     if (!initialized) initialized = true;
   });
@@ -131,7 +230,12 @@ function setupChatHandler(roomUid) {
   if (socket) {
     socket.off("chat"); // remove old listener before re-adding (prevents duplicates on reconnect)
     socket.on("chat", async (data) => {
-      const message = (data?.message || "").trim();
+      const rawMessage = (data?.message || "").trim();
+      let message = rawMessage;
+      if (message.startsWith("!")) {
+        const afterExcl = message.slice(1).trim();
+        message = "!" + afterExcl;
+      }
       const senderUsername = data?.username || data?.user?.username || "someone";
 
       // Ignore empty messages
@@ -217,6 +321,233 @@ function setupChatHandler(roomUid) {
           } else {
             sendChatMessage(`KD : I couldn't get an answer right now.`, roomUid);
           }
+        }
+      } else if (message.toLowerCase().startsWith("!kick room ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const argsStr = message.slice("!kick room ".length).trim();
+        if (!argsStr) return;
+
+        const parts = argsStr.split(/\s+/);
+        const targetRoomUid = parts[0];
+        const targetUser = parts[1];
+
+        if (!targetRoomUid || !targetUser || targetUser === "someone") return;
+
+        if (targetUser.toLowerCase().trim() === senderUsername.toLowerCase().trim()) return;
+
+        updateRoomKickList(targetRoomUid, targetUser, true).then(res => {
+          if (res && !res.error) {
+            emitKickUserForRoom(targetRoomUid, targetUser, true);
+          }
+        }).catch(() => { });
+      } else if (message.toLowerCase().startsWith("!kick ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const targetUser = message.slice("!kick ".length).trim();
+        if (!targetUser) return;
+
+        emit("kickUser", {
+          username: targetUser,
+          addOrRemove: true
+        });
+      } else if (message.toLowerCase().startsWith("!unkick room ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const argsStr = message.slice("!unkick room ".length).trim();
+        if (!argsStr) return;
+
+        const parts = argsStr.split(/\s+/);
+        const targetRoomUid = parts[0];
+        const targetUser = parts[1];
+
+        if (!targetRoomUid || !targetUser || targetUser === "someone") return;
+
+        updateRoomKickList(targetRoomUid, targetUser, false).then(res => {
+          if (res && !res.error) {
+            emitKickUserForRoom(targetRoomUid, targetUser, false);
+          }
+        }).catch(() => { });
+      } else if (message.toLowerCase().startsWith("!unkick ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const targetUser = message.slice("!unkick ".length).trim();
+        if (!targetUser) return;
+
+        emit("kickUser", {
+          username: targetUser,
+          addOrRemove: false
+        });
+      } else if (message.toLowerCase().startsWith("!admin room ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const argsStr = message.slice("!admin room ".length).trim();
+        if (!argsStr) return;
+
+        const parts = argsStr.split(/\s+/);
+        const targetRoomUid = parts[0];
+        const targetUser = parts[1] ? parts[1] : senderUsername;
+
+        if (!targetRoomUid || !targetUser || targetUser === "someone") return;
+
+        getRoomDetails(targetRoomUid).then(details => {
+          if (!details) return;
+
+          const adminsList = details.admins || [];
+          if (adminsList.includes(targetUser)) return;
+
+          updateRoomAdminList(targetRoomUid, targetUser, true).then(res => {
+            if (res && !res.error) {
+              emitAddAdminForRoom(targetRoomUid, targetUser, true);
+            }
+          });
+        }).catch(() => { });
+      } else if (message.toLowerCase() === "!admin" || message.toLowerCase().startsWith("!admin ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const targetUser = message.toLowerCase() === "!admin"
+          ? senderUsername
+          : message.slice("!admin ".length).trim();
+
+        if (!targetUser || targetUser === "someone") return;
+
+        getRoomDetails(roomUid).then(details => {
+          const adminsList = details?.admins || [];
+          if (adminsList.includes(targetUser)) return;
+
+          updateRoomAdminList(roomUid, targetUser, true).then(res => {
+            if (res && !res.error) {
+              const isCurrentlySocketAdmin = currentAdmins.includes(targetUser);
+              if (!isCurrentlySocketAdmin) {
+                emit("addAdmin", targetUser);
+              }
+            }
+          });
+        }).catch(() => { });
+      } else if (message.toLowerCase().startsWith("!unadmin room ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const argsStr = message.slice("!unadmin room ".length).trim();
+        if (!argsStr) return;
+
+        const parts = argsStr.split(/\s+/);
+        const targetRoomUid = parts[0];
+        const targetUser = parts[1] ? parts[1] : senderUsername;
+
+        if (!targetRoomUid || !targetUser || targetUser === "someone") return;
+
+        getRoomDetails(targetRoomUid).then(details => {
+          if (!details) return;
+
+          const adminsList = details.admins || [];
+          if (!adminsList.includes(targetUser)) return;
+
+          updateRoomAdminList(targetRoomUid, targetUser, false).then(res => {
+            if (res && !res.error) {
+              emitAddAdminForRoom(targetRoomUid, targetUser, false);
+            }
+          });
+        }).catch(() => { });
+      } else if (message.toLowerCase() === "!unadmin" || message.toLowerCase().startsWith("!unadmin ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const targetUser = message.toLowerCase() === "!unadmin"
+          ? senderUsername
+          : message.slice("!unadmin ".length).trim();
+
+        if (!targetUser || targetUser === "someone") return;
+
+        getRoomDetails(roomUid).then(details => {
+          const adminsList = details?.admins || [];
+          if (!adminsList.includes(targetUser)) return;
+
+          updateRoomAdminList(roomUid, targetUser, false).then(res => {
+            if (res && !res.error) {
+              const isCurrentlySocketAdmin = currentAdmins.includes(targetUser);
+              if (isCurrentlySocketAdmin) {
+                emit("addAdmin", targetUser);
+              }
+            }
+          });
+        }).catch(() => { });
+      } else if (message.toLowerCase().startsWith("!allow ") || message.toLowerCase().startsWith("! allow ")) {
+        if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        let targetUser = "";
+        if (message.toLowerCase().startsWith("!allow ")) {
+          targetUser = message.slice("!allow ".length).trim();
+        } else {
+          targetUser = message.slice("! allow ".length).trim();
+        }
+
+        if (!targetUser) return;
+        const normalizedTarget = targetUser.toLowerCase().trim();
+
+        const currentAdminsList = loadAllowedAdmins();
+        if (currentAdminsList.includes(normalizedTarget)) return;
+
+        currentAdminsList.push(normalizedTarget);
+        saveAllowedAdmins(currentAdminsList);
+      } else if (message.toLowerCase().startsWith("!revoke ") || message.toLowerCase().startsWith("! revoke ")) {
+        if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        let targetUser = "";
+        if (message.toLowerCase().startsWith("!revoke ")) {
+          targetUser = message.slice("!revoke ".length).trim();
+        } else {
+          targetUser = message.slice("! revoke ".length).trim();
+        }
+
+        if (!targetUser) return;
+        const normalizedTarget = targetUser.toLowerCase().trim();
+
+        const currentAdminsList = loadAllowedAdmins();
+        if (!currentAdminsList.includes(normalizedTarget)) return;
+
+        const updatedAdmins = currentAdminsList.filter(u => u !== normalizedTarget);
+        saveAllowedAdmins(updatedAdmins);
+      } else if (message.toLowerCase() === "!allowed" || message.toLowerCase() === "! allowed") {
+        if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
+          return;
+        }
+
+        const list = loadAllowedAdmins();
+        if (list.length === 0) {
+          sendChatMessage(`KD: No users have allowed admin permissions except the room owner (@${OWNER_USERNAME}).`, roomUid);
+        } else {
+          const listStr = list.map(u => `@${u}`).join(", ");
+          sendChatMessage(`KD: Allowed users: ${listStr}`, roomUid);
         }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history

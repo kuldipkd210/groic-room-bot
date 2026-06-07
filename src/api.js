@@ -82,9 +82,105 @@ async function deleteRoom(roomUid) {
   }
 }
 
+async function updateRoomKickList(roomUid, targetUsername, isKick) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}.`);
+    }
+
+    let kickedList = details.kicked || [];
+    if (isKick) {
+      if (kickedList.includes(targetUsername)) {
+        console.log(`User ${targetUsername} is already in the kick list.`);
+        return { message: "Already kicked", error: false };
+      }
+      kickedList.push(targetUsername);
+    } else {
+      if (!kickedList.includes(targetUsername)) {
+        console.log(`User ${targetUsername} is not in the kick list.`);
+        return { message: "Not in kick list", error: false };
+      }
+      kickedList = kickedList.filter(u => u !== targetUsername);
+    }
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      kicked: kickedList
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not update kick list for room ${roomUid}`);
+    return null;
+  }
+}
+
+async function updateRoomAdminList(roomUid, targetUsername, isAdmin) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}.`);
+    }
+
+    let adminsList = details.admins || [];
+    if (isAdmin) {
+      if (adminsList.includes(targetUsername)) {
+        console.log(`User ${targetUsername} is already in the admin list.`);
+        return { message: "Already admin", error: false };
+      }
+      adminsList.push(targetUsername);
+    } else {
+      if (!adminsList.includes(targetUsername)) {
+        console.log(`User ${targetUsername} is not in the admin list.`);
+        return { message: "Not in admin list", error: false };
+      }
+      adminsList = adminsList.filter(u => u !== targetUsername);
+    }
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      admins: adminsList
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not update admin list for room ${roomUid}`);
+    return null;
+  }
+}
+
 module.exports = {
   createRoom,
   getRoomDetails,
   deleteRoom,
-  getGroicHeaders
+  getGroicHeaders,
+  updateRoomKickList,
+  updateRoomAdminList
 };
