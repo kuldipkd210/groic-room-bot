@@ -176,11 +176,98 @@ async function updateRoomAdminList(roomUid, targetUsername, isAdmin) {
   }
 }
 
+async function updateRoomVisibility(roomUid, isPublic) {
+  try {
+    const payload = {
+      isPublicRoom: isPublic
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not update room visibility for ${roomUid}`);
+    return null;
+  }
+}
+
+async function updateRoomEngagement(roomUid, score, joins, messages) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}. Cannot safely update engagement without overwriting owner/credentials.`);
+    }
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      engagementScore: score,
+      joinCount: joins,
+      messagesSent: messages
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not update room engagement for ${roomUid}`);
+    return null;
+  }
+}
+
+async function clearRoomKickList(roomUid) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}.`);
+    }
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      kicked: []
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not clear kick list for room ${roomUid}`);
+    return null;
+  }
+}
+
 module.exports = {
   createRoom,
   getRoomDetails,
   deleteRoom,
   getGroicHeaders,
   updateRoomKickList,
-  updateRoomAdminList
+  updateRoomAdminList,
+  updateRoomVisibility,
+  updateRoomEngagement,
+  clearRoomKickList
 };

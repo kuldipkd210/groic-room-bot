@@ -38,6 +38,7 @@ let knownUsers = new Set();
 let initialized = false; // true after first presenceUpdate processed
 let chatHistory = []; // Stores rolling { username, message } recent messages
 let currentAdmins = [];
+const userStatuses = {};
 
 function isAllowedAdminUser(username) {
   const normalized = (username || "").toLowerCase().trim();
@@ -118,11 +119,10 @@ function sendChatMessage(message, roomUid) {
 }
 
 function isBotUser(user) {
-  const username = user.username || "";
-  const name = user.name || "";
-  const imageUrl = user.imageUrl || null;
-  return (username === "" && name === "") ||
-    (username === BOT_USERNAME && name === BOT_NAME);
+  const username = (user.username || "").trim();
+  const name = (user.name || "").trim();
+  return username === "" ||
+    (username === BOT_USERNAME.trim() && name === BOT_NAME.trim());
 }
 
 // ─── Socket-event-based user detection (no HTTP polling) ───────────────────
@@ -134,6 +134,7 @@ function isBotUser(user) {
 
 function processUserList(activeUsers, roomUid) {
   const currentActiveKeys = new Set();
+  const activeUsernames = new Set();
   let selfFound = false;
 
   for (const user of activeUsers) {
@@ -150,10 +151,17 @@ function processUserList(activeUsers, roomUid) {
       continue;
     }
 
+    const cleanUsername = username.trim() || "user";
+    activeUsernames.add(cleanUsername);
+
+    // Initialize default status to AVL if not already set
+    if (!userStatuses[cleanUsername]) {
+      userStatuses[cleanUsername] = "AVL";
+    }
+
     if (!knownUsers.has(userKey)) {
       knownUsers.add(userKey);
       if (initialized) {
-        const cleanUsername = username.trim() || "user";
         sendChatMessage(`KD : Welcome ${cleanUsername}! Enjoy the music 🎶`, roomUid);
       }
     }
@@ -163,6 +171,13 @@ function processUserList(activeUsers, roomUid) {
   for (const knownKey of knownUsers) {
     if (!currentActiveKeys.has(knownKey)) {
       knownUsers.delete(knownKey);
+    }
+  }
+
+  // Clean up statuses of users who left
+  for (const username of Object.keys(userStatuses)) {
+    if (!activeUsernames.has(username)) {
+      delete userStatuses[username];
     }
   }
 
@@ -219,6 +234,10 @@ function stopHandlers() {
   knownUsers.clear();
   initialized = false;
 
+  for (const key of Object.keys(userStatuses)) {
+    delete userStatuses[key];
+  }
+
   if (keepAliveInterval) {
     clearInterval(keepAliveInterval);
     keepAliveInterval = null;
@@ -240,6 +259,66 @@ function setupChatHandler(roomUid) {
 
       // Ignore empty messages
       if (!message) return;
+
+      const lowerMsg = message.toLowerCase();
+
+      // ─── User Status Commands ───────────────────────────────────────
+      if (lowerMsg === "!afk") {
+        userStatuses[senderUsername] = "AFK";
+        sendChatMessage(`System: @${senderUsername} is now AFK 📵`, roomUid);
+        return;
+      } else if (lowerMsg === "!slp") {
+        userStatuses[senderUsername] = "SLP";
+        sendChatMessage(`System: @${senderUsername} is now SLP 💤`, roomUid);
+        return;
+      } else if (lowerMsg === "!avl") {
+        userStatuses[senderUsername] = "AVL";
+        sendChatMessage(`System: @${senderUsername} is now AVL 🙋`, roomUid);
+        return;
+      } else if (lowerMsg.startsWith("!status")) {
+        const parts = message.trim().split(/\s+/);
+        if (parts.length === 1) {
+          const users = Object.keys(userStatuses);
+          if (users.length === 0) {
+            sendChatMessage(`System: No active users in the room.`, roomUid);
+          } else {
+            let reply = "System: User Statuses:";
+            for (const u of users) {
+              const status = userStatuses[u];
+              let emoji = "🙋";
+              if (status === "AFK") emoji = "📵";
+              if (status === "SLP") emoji = "💤";
+              reply += `\n@${u} - ${status} ${emoji}`;
+            }
+            sendChatMessage(reply, roomUid);
+          }
+        } else {
+          let target = parts.slice(1).join(" ").trim();
+          if (target.startsWith("@")) {
+            target = target.substring(1);
+          }
+          const targetLower = target.toLowerCase();
+          const keys = Object.keys(userStatuses);
+          let matchedUser = keys.find(
+            (u) => u.toLowerCase() === targetLower
+          );
+          if (!matchedUser) {
+            matchedUser = keys.find(
+              (u) => u.toLowerCase().startsWith(targetLower)
+            );
+          }
+          if (matchedUser) {
+            const status = userStatuses[matchedUser];
+            let emoji = "🙋";
+            if (status === "AFK") emoji = "📵";
+            if (status === "SLP") emoji = "💤";
+            sendChatMessage(`System: @${matchedUser} - ${status} ${emoji}`, roomUid);
+          } else {
+            sendChatMessage(`System: @${target} is not in the room.`, roomUid);
+          }
+        }
+        return;
+      }
 
       // ─── !eng command ───────────────────────────────────────────────
       // Usage:
