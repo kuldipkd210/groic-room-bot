@@ -1,5 +1,5 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
-const { SONG, BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
+const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
 const { updateRoomKickList, updateRoomAdminList, getRoomDetails } = require("./api");
@@ -105,13 +105,6 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
   socket.on("connect_error", () => {
     socket.disconnect();
   });
-}
-
-function autoPlaySong() {
-  setTimeout(() => {
-    emit("playSong", SONG);
-    // console.log("Auto playSong sent:", SONG.title);
-  }, 8000);
 }
 
 function sendChatMessage(message, roomUid) {
@@ -265,24 +258,24 @@ function setupChatHandler(roomUid) {
       // ─── User Status Commands ───────────────────────────────────────
       if (lowerMsg === "!afk") {
         userStatuses[senderUsername] = "AFK";
-        sendChatMessage(`System: @${senderUsername} is now AFK 📵`, roomUid);
+        sendChatMessage(`KD: @${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
         return;
       } else if (lowerMsg === "!slp") {
         userStatuses[senderUsername] = "SLP";
-        sendChatMessage(`System: @${senderUsername} is now SLP 💤`, roomUid);
+        sendChatMessage(`KD: @${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
         return;
       } else if (lowerMsg === "!avl") {
         userStatuses[senderUsername] = "AVL";
-        sendChatMessage(`System: @${senderUsername} is now AVL 🙋`, roomUid);
+        sendChatMessage(`KD: @${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
         return;
       } else if (lowerMsg.startsWith("!status")) {
         const parts = message.trim().split(/\s+/);
         if (parts.length === 1) {
           const users = Object.keys(userStatuses);
           if (users.length === 0) {
-            sendChatMessage(`System: No active users in the room.`, roomUid);
+            sendChatMessage(`KD: No active users in the room.`, roomUid);
           } else {
-            let reply = "System: User Statuses:";
+            let reply = "KD: User Statuses:";
             for (const u of users) {
               const status = userStatuses[u];
               let emoji = "🙋";
@@ -312,9 +305,9 @@ function setupChatHandler(roomUid) {
             let emoji = "🙋";
             if (status === "AFK") emoji = "📵";
             if (status === "SLP") emoji = "💤";
-            sendChatMessage(`System: @${matchedUser} - ${status} ${emoji}`, roomUid);
+            sendChatMessage(`KD: @${matchedUser} - ${status} ${emoji}`, roomUid);
           } else {
-            sendChatMessage(`System: @${target} is not in the room.`, roomUid);
+            sendChatMessage(`KD: @${target} is not in the room.`, roomUid);
           }
         }
         return;
@@ -418,6 +411,13 @@ function setupChatHandler(roomUid) {
 
         if (targetUser.toLowerCase().trim() === senderUsername.toLowerCase().trim()) return;
 
+        // Protection: Only room owner can kick allowed admins
+        const normalizedTarget = targetUser.toLowerCase().trim();
+        if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: Cant perform this on co-owners`, roomUid);
+          return;
+        }
+
         updateRoomKickList(targetRoomUid, targetUser, true).then(res => {
           if (res && !res.error) {
             emitKickUserForRoom(targetRoomUid, targetUser, true);
@@ -431,6 +431,13 @@ function setupChatHandler(roomUid) {
 
         const targetUser = message.slice("!kick ".length).trim();
         if (!targetUser) return;
+
+        // Protection: Only room owner can kick allowed admins
+        const normalizedTarget = targetUser.toLowerCase().trim();
+        if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
+          return;
+        }
 
         emit("kickUser", {
           username: targetUser,
@@ -536,6 +543,13 @@ function setupChatHandler(roomUid) {
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
+        // Protection: Only room owner can unadmin allowed admins
+        const normalizedTarget = targetUser.toLowerCase().trim();
+        if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
+          return;
+        }
+
         getRoomDetails(targetRoomUid).then(details => {
           if (!details) return;
 
@@ -559,6 +573,13 @@ function setupChatHandler(roomUid) {
           : message.slice("!unadmin ".length).trim();
 
         if (!targetUser || targetUser === "someone") return;
+
+        // Protection: Only room owner can unadmin allowed admins
+        const normalizedTarget = targetUser.toLowerCase().trim();
+        if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
+          return;
+        }
 
         getRoomDetails(roomUid).then(details => {
           const adminsList = details?.admins || [];
@@ -649,7 +670,6 @@ function setupChatHandler(roomUid) {
 }
 
 module.exports = {
-  autoPlaySong,
   sendChatMessage,
   startUserJoinWatcher,
   startKeepAlive,

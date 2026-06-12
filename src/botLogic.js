@@ -2,10 +2,10 @@ const { refreshAccessToken } = require("./auth");
 const { createRoom, getRoomDetails } = require("./api");
 const { connectSocket, getSocket, updateSocketAuth } = require("./socket");
 const { loadRoomUid, saveRoomUid } = require("./storage");
-const { sleep, isCloudflareChallenge } = require("./helpers");
+const { sleep } = require("./helpers");
 const { BOT_USERNAME, BOT_NAME } = require("../config/constants");
 const { ROOM_UID: ENV_ROOM_UID } = require("../config/env");
-const { autoPlaySong, startUserJoinWatcher, startKeepAlive, stopHandlers, setupChatHandler } = require("./handlers");
+const { startUserJoinWatcher, startKeepAlive, stopHandlers, setupChatHandler } = require("./handlers");
 
 let currentRoomUid = null;
 let botStarted = false;
@@ -91,7 +91,6 @@ async function startBot() {
         setupChatHandler(currentRoomUid);
         startUserJoinWatcher(currentRoomUid);
         startKeepAlive(currentRoomUid);
-        autoPlaySong();
       },
       (reason) => {
         console.log("Socket disconnected:", reason);
