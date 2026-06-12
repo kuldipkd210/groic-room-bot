@@ -654,25 +654,13 @@ function setupChatHandler(roomUid) {
           return;
         }
         emit("adminControl", true);
-        updateRoomAdminControl(roomUid, true).then(res => {
-          if (res && !res.error) {
-            sendChatMessage(`KD: Admin control enabled. Only admins can control playback.`, roomUid);
-          } else {
-            sendChatMessage(`KD: Failed to enable admin control.`, roomUid);
-          }
-        }).catch(() => { });
+        updateRoomAdminControl(roomUid, true).catch(() => { });
       } else if (message.toLowerCase() === "!disable admin") {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
         }
         emit("adminControl", false);
-        updateRoomAdminControl(roomUid, false).then(res => {
-          if (res && !res.error) {
-            sendChatMessage(`KD: Admin control disabled. Everyone can control playback.`, roomUid);
-          } else {
-            sendChatMessage(`KD: Failed to disable admin control.`, roomUid);
-          }
-        }).catch(() => { });
+        updateRoomAdminControl(roomUid, false).catch(() => { });
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
         const isBotResponse = message.startsWith("KD :") || senderUsername === " " || senderUsername === BOT_USERNAME;
