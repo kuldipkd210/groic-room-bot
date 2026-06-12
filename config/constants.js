@@ -3,6 +3,7 @@ module.exports = {
   OWNER_USERNAME: "kd_zoro",
   BOT_USERNAME: " ",
   BOT_NAME: " ",
+  BOT_IMAGE_URL: "https://i.ibb.co/wNVgfQRK/fgdsgf.jpg",
   ROOM_NAME: "01101011 01100100",
   ROOM_DESC: "There are 10 types of people: those who get it, and those who don’t!",
   ROOM_GENRE: ["KD-Special"],

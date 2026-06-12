@@ -260,6 +260,41 @@ async function clearRoomKickList(roomUid) {
   }
 }
 
+async function updateRoomAdminControl(roomUid, enableAdminControl) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}.`);
+    }
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      musicStreaming: {
+        ...(details.musicStreaming || {}),
+        adminControl: enableAdminControl
+      }
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    logAxiosError(err, `Could not update admin control for room ${roomUid}`);
+    return null;
+  }
+}
+
 module.exports = {
   createRoom,
   getRoomDetails,
@@ -269,5 +304,6 @@ module.exports = {
   updateRoomAdminList,
   updateRoomVisibility,
   updateRoomEngagement,
-  clearRoomKickList
+  clearRoomKickList,
+  updateRoomAdminControl
 };

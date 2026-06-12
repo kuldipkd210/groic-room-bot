@@ -2,7 +2,7 @@ const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
-const { updateRoomKickList, updateRoomAdminList, getRoomDetails } = require("./api");
+const { updateRoomKickList, updateRoomAdminList, getRoomDetails, updateRoomAdminControl } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
@@ -649,6 +649,30 @@ function setupChatHandler(roomUid) {
           const listStr = list.map(u => `@${u}`).join(", ");
           sendChatMessage(`KD: Allowed users: ${listStr}`, roomUid);
         }
+      } else if (message.toLowerCase() === "!enable admin") {
+        if (!isAllowedAdminUser(senderUsername)) {
+          return;
+        }
+        emit("adminControl", true);
+        updateRoomAdminControl(roomUid, true).then(res => {
+          if (res && !res.error) {
+            sendChatMessage(`KD: Admin control enabled. Only admins can control playback.`, roomUid);
+          } else {
+            sendChatMessage(`KD: Failed to enable admin control.`, roomUid);
+          }
+        }).catch(() => { });
+      } else if (message.toLowerCase() === "!disable admin") {
+        if (!isAllowedAdminUser(senderUsername)) {
+          return;
+        }
+        emit("adminControl", false);
+        updateRoomAdminControl(roomUid, false).then(res => {
+          if (res && !res.error) {
+            sendChatMessage(`KD: Admin control disabled. Everyone can control playback.`, roomUid);
+          } else {
+            sendChatMessage(`KD: Failed to disable admin control.`, roomUid);
+          }
+        }).catch(() => { });
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
         const isBotResponse = message.startsWith("KD :") || senderUsername === " " || senderUsername === BOT_USERNAME;

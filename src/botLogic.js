@@ -3,7 +3,7 @@ const { createRoom, getRoomDetails } = require("./api");
 const { connectSocket, getSocket, updateSocketAuth } = require("./socket");
 const { loadRoomUid, saveRoomUid } = require("./storage");
 const { sleep } = require("./helpers");
-const { BOT_USERNAME, BOT_NAME } = require("../config/constants");
+const { BOT_USERNAME, BOT_NAME, BOT_IMAGE_URL } = require("../config/constants");
 const { ROOM_UID: ENV_ROOM_UID } = require("../config/env");
 const { startUserJoinWatcher, startKeepAlive, stopHandlers, setupChatHandler } = require("./handlers");
 
@@ -78,12 +78,12 @@ async function startBot() {
       (socket) => {
         console.log("Socket connected:", socket.id);
 
-        // Bot always joins with its default (blank) identity
+        // Bot always joins with its default identity
         socket.emit("joinRoom", {
           roomUid: currentRoomUid,
           username: BOT_USERNAME,
           name: BOT_NAME,
-          imageUrl: "",
+          imageUrl: BOT_IMAGE_URL,
           isBot: true
         });
 
