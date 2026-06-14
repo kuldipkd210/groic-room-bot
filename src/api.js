@@ -295,6 +295,48 @@ async function updateRoomAdminControl(roomUid, enableAdminControl) {
   }
 }
 
+async function clearRoomGhosts(roomUid) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) {
+      throw new Error(`Room details not found for UID: ${roomUid}.`);
+    }
+
+    const originalCount = details.activeUsers ? details.activeUsers.length : 0;
+    const updatedActiveUsers = (details.activeUsers || []).filter(user => {
+      return user.username !== undefined && user.username !== null;
+    });
+
+    const ghostCount = originalCount - updatedActiveUsers.length;
+    if (ghostCount === 0) {
+      return { error: false, ghostCount: 0, message: "No ghost users found" };
+    }
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      activeUsers: updatedActiveUsers
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return { error: !!res.data.error, ghostCount, message: res.data.message || "Ghosts cleared" };
+  } catch (err) {
+    logAxiosError(err, `Could not clear ghost users for room ${roomUid}`);
+    return { error: true, ghostCount: 0, message: err.message };
+  }
+}
+
 module.exports = {
   createRoom,
   getRoomDetails,
@@ -305,5 +347,7 @@ module.exports = {
   updateRoomVisibility,
   updateRoomEngagement,
   clearRoomKickList,
-  updateRoomAdminControl
+  updateRoomAdminControl,
+  clearRoomGhosts
 };
+

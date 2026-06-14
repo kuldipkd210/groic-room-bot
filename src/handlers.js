@@ -107,6 +107,32 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
   });
 }
 
+function emitAdminControlForRoom(roomUid, enableAdminControl) {
+  const token = getToken();
+  const socket = createSocketInstance("https://socket-v2.groic.in", token);
+
+  socket.on("connect", () => {
+    socket.emit("joinRoom", {
+      roomUid,
+      username: " ",
+      name: " ",
+      imageUrl: "",
+      isBot: false
+    });
+  });
+
+  socket.on("presenceUpdate", () => {
+    socket.emit("adminControl", enableAdminControl);
+    setTimeout(() => {
+      socket.disconnect();
+    }, 1000);
+  });
+
+  socket.on("connect_error", () => {
+    socket.disconnect();
+  });
+}
+
 function sendChatMessage(message, roomUid) {
   emit("sendChat", { message, roomUid });
 }
@@ -649,18 +675,40 @@ function setupChatHandler(roomUid) {
           const listStr = list.map(u => `@${u}`).join(", ");
           sendChatMessage(`KD: Allowed users: ${listStr}`, roomUid);
         }
-      } else if (message.toLowerCase() === "!enable admin") {
+      } else if (lowerMsg === "!enable admin" || lowerMsg.startsWith("!enable admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
         }
-        emit("adminControl", true);
-        updateRoomAdminControl(roomUid, true).catch(() => { });
-      } else if (message.toLowerCase() === "!disable admin") {
+        let targetRoomUid = roomUid;
+        const parts = message.split(/\s+/);
+        if (parts.length > 2) {
+          targetRoomUid = parts.slice(2).join(" ").trim();
+        }
+
+        if (targetRoomUid === roomUid) {
+          emit("adminControl", true);
+          updateRoomAdminControl(roomUid, true).catch(() => { });
+        } else {
+          emitAdminControlForRoom(targetRoomUid, true);
+          updateRoomAdminControl(targetRoomUid, true).catch(() => { });
+        }
+      } else if (lowerMsg === "!disable admin" || lowerMsg.startsWith("!disable admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
         }
-        emit("adminControl", false);
-        updateRoomAdminControl(roomUid, false).catch(() => { });
+        let targetRoomUid = roomUid;
+        const parts = message.split(/\s+/);
+        if (parts.length > 2) {
+          targetRoomUid = parts.slice(2).join(" ").trim();
+        }
+
+        if (targetRoomUid === roomUid) {
+          emit("adminControl", false);
+          updateRoomAdminControl(roomUid, false).catch(() => { });
+        } else {
+          emitAdminControlForRoom(targetRoomUid, false);
+          updateRoomAdminControl(targetRoomUid, false).catch(() => { });
+        }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
         const isBotResponse = message.startsWith("KD :") || senderUsername === " " || senderUsername === BOT_USERNAME;

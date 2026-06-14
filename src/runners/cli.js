@@ -5,7 +5,8 @@ const {
   updateRoomEngagement, 
   updateRoomKickList, 
   updateRoomAdminList,
-  clearRoomKickList
+  clearRoomKickList,
+  clearRoomGhosts
 } = require("../api");
 const { loadRoomUid } = require("../storage");
 const { createSocketInstance } = require("../socket");
@@ -155,7 +156,7 @@ async function socketEmitClearKicks(roomUid, kickedUsernames) {
 
 async function run() {
   const action = process.argv[2];
-  if (!action || !["private", "public", "status", "engagement", "kick", "unkick", "clear-kicks", "add-admin", "remove-admin"].includes(action.toLowerCase())) {
+  if (!action || !["private", "public", "status", "engagement", "kick", "unkick", "clear-kicks", "add-admin", "remove-admin", "clear-ghosts"].includes(action.toLowerCase())) {
     console.error("Usage:\n" +
       "  node roomAction.js status [roomUid]\n" +
       "  node roomAction.js public [roomUid]\n" +
@@ -165,7 +166,8 @@ async function run() {
       "  node roomAction.js unkick [roomUid] <username>\n" +
       "  node roomAction.js clear-kicks [roomUid]\n" +
       "  node roomAction.js add-admin [roomUid] <username>\n" +
-      "  node roomAction.js remove-admin [roomUid] <username>\n"
+      "  node roomAction.js remove-admin [roomUid] <username>\n" +
+      "  node roomAction.js clear-ghosts [roomUid]\n"
     );
     process.exit(1);
   }
@@ -331,6 +333,15 @@ async function run() {
         } else {
           console.error(`\nFAILED: Could not update admin list for user ${targetUsername}.\n`);
         }
+      }
+
+    } else if (action.toLowerCase() === "clear-ghosts") {
+      console.log(`Clearing ghost users for room ${roomUid}...`);
+      const res = await clearRoomGhosts(roomUid);
+      if (res && !res.error) {
+        console.log(`\nSUCCESS: ${res.ghostCount} ghost user(s) removed from room ${roomUid}!\n`);
+      } else {
+        console.error(`\nFAILED: ${res ? res.message : "Could not clear ghosts."}\n`);
       }
 
     } else {
