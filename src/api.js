@@ -29,7 +29,7 @@ async function createRoom() {
     username: OWNER_USERNAME,
     roomName: ROOM_NAME,
     roomDesc: ROOM_DESC,
-    roomGenre: ROOM_GENRE,
+    roomGenre: ["Popular"],
     roomCountry: "IN",
     maxParticipants: MAX_PARTICIPANTS,
     isPublicRoom: true
@@ -60,12 +60,15 @@ async function getRoomDetails(roomUid) {
 
     return res.data.data;
   } catch (err) {
-    if (err.response && err.response.status === 404) {
-      console.log(`Room ${roomUid} definitely not found (404).`);
+    if (err.response && (
+      err.response.status === 404 || 
+      (err.response.status === 400 && err.response.data && typeof err.response.data.message === "string" && err.response.data.message.toLowerCase().includes("invalid room"))
+    )) {
+      console.log(`Room ${roomUid} definitely not found or invalid.`);
       return null;
     }
     logAxiosError(err, "Could not fetch room details (Network/Server error)");
-    throw err; // Rethrow to indicate this is NOT a "not found" case
+    throw err;
   }
 }
 
@@ -105,14 +108,6 @@ async function updateRoomKickList(roomUid, targetUsername, isKick) {
     }
 
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       kicked: kickedList
     };
 
@@ -152,14 +147,6 @@ async function updateRoomAdminList(roomUid, targetUsername, isAdmin) {
     }
 
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       admins: adminsList
     };
 
@@ -202,14 +189,6 @@ async function updateRoomEngagement(roomUid, score, joins, messages) {
       throw new Error(`Room details not found for UID: ${roomUid}. Cannot safely update engagement without overwriting owner/credentials.`);
     }
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       engagementScore: score,
       joinCount: joins,
       messagesSent: messages
@@ -236,14 +215,6 @@ async function clearRoomKickList(roomUid) {
     }
 
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       kicked: []
     };
 
@@ -268,14 +239,6 @@ async function updateRoomAdminControl(roomUid, enableAdminControl) {
     }
 
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       musicStreaming: {
         ...(details.musicStreaming || {}),
         adminControl: enableAdminControl
@@ -313,14 +276,6 @@ async function clearRoomGhosts(roomUid) {
     }
 
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
-      roomGenre: details.roomGenre,
-      roomCountry: details.roomCountry || "IN",
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom,
       activeUsers: updatedActiveUsers
     };
 

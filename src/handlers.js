@@ -1,11 +1,45 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
-const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
+const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
-const { updateRoomKickList, updateRoomAdminList, getRoomDetails, updateRoomAdminControl, getActivePublicRooms } = require("./api");
+const { updateRoomKickList, updateRoomAdminList, getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
+
+function encodeUUID(uuid) {
+  const hex = uuid.replace(/-/g, "");
+  if (hex.length !== 32) return "";
+  
+  return hex.split("").map(char => {
+    const num = parseInt(char, 16);
+    return num.toString(2).padStart(4, "0")
+      .replace(/0/g, "\u200C")
+      .replace(/1/g, "\u200D");
+  }).join("");
+}
+
+function decodeUUID(encodedStr) {
+  if (!encodedStr) return null;
+  // Match any zero-width characters (including U+200C, U+200D, and U+200B)
+  const match = encodedStr.match(/[\u200C\u200D\u200B]+/g);
+  if (!match) return null;
+  
+  // Combine all matches and strip out zero-width spaces (U+200B)
+  const combined = match.join("").replace(/\u200B/g, "");
+  if (combined.length < 128) return null;
+  
+  // Slice the last 128 characters representing the most recent UUID
+  const bits = combined.substring(combined.length - 128);
+  let hex = "";
+  for (let i = 0; i < bits.length; i += 4) {
+    const chunk = bits.substring(i, i + 4);
+    const binary = chunk.replace(/\u200C/g, "0").replace(/\u200D/g, "1");
+    hex += parseInt(binary, 2).toString(16);
+  }
+  
+  return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}`;
+}
 
 const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
@@ -69,46 +103,75 @@ function saveAllowedAdmins(adminsList) {
 }
 
 async function syncAllowedAdminsFromCloud(roomUid) {
+  const envBlobId = process.env.ALLOWED_ADMINS_BLOB_ID;
+  if (envBlobId) {
+    console.log(`[Handlers] Syncing allowed admins using env blob ID: ${envBlobId}`);
+    try {
+      const axios = require("axios");
+      const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, { timeout: 10000, proxy: false });
+      if (Array.isArray(res.data)) {
+        const fromCloud = res.data.map(u => u.toLowerCase().trim());
+        saveAllowedAdmins(fromCloud);
+        console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
+      }
+    } catch (err) {
+      console.error(`[Handlers] Failed to read env JSON Blob ${envBlobId}:`, err.message);
+    }
+    return;
+  }
+
   try {
     const details = await getRoomDetails(roomUid);
     if (!details) return;
 
+    const desc = details.roomDesc || "";
+    let blobId = decodeUUID(desc);
+
     const countryVal = (details.roomCountry || "").trim();
-    // A JSON Blob ID is a UUID (36 chars: 8-4-4-4-12 hex chars)
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
+    const countryIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
+
+    if (!blobId && countryIsUuid) {
+      blobId = countryVal;
+      console.log(`[Handlers] Migrating legacy JSON Blob ID from roomCountry: ${blobId}`);
+    }
+
     const axios = require("axios");
+    const VALID_GENRES = ["pop", "popular", "rock", "hip hop", "dance", "jazz", "classical", "metal", "country", "r&b", "electronic", "acoustic", "indie"];
+    const cleanGenres = (ROOM_GENRE || []).filter(g => typeof g === "string" && VALID_GENRES.includes(g.toLowerCase().trim()));
+    if (cleanGenres.length === 0) cleanGenres.push("Popular");
 
-    // Clean up any old jsonblob: or co-owner: tags from genres if present
-    const cleanGenres = (details.roomGenre || []).filter(g => !g.startsWith("jsonblob:") && !g.startsWith("co-owner:"));
-
-    if (isUuid) {
-      const blobId = countryVal;
-      console.log(`[Handlers] Found JSON Blob ID in roomCountry: ${blobId}`);
+    if (blobId) {
+      console.log(`[Handlers] Found JSON Blob ID: ${blobId}`);
       try {
-        const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, { timeout: 10000 });
+        const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, { timeout: 10000, proxy: false });
         if (Array.isArray(res.data)) {
           const fromCloud = res.data.map(u => u.toLowerCase().trim());
           saveAllowedAdmins(fromCloud);
           console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
 
-          // If we had old genres to clean, do a patch now
-          if (details.roomGenre && details.roomGenre.length !== cleanGenres.length) {
+          const baseDesc = desc.replace(/[\u200C\u200D\u200B]+/g, "").trim();
+          const targetDesc = ROOM_DESC || baseDesc;
+          const newDesc = `${targetDesc}\n\n${encodeUUID(blobId)}`.trim();
+
+          const needsDescUpdate = (desc !== newDesc);
+          const needsNameUpdate = (details.roomName !== ROOM_NAME);
+          const needsGenreUpdate = JSON.stringify(details.roomGenre) !== JSON.stringify(cleanGenres);
+          const needsCountryRestore = (details.roomCountry !== "IN");
+
+          if (needsDescUpdate || needsNameUpdate || needsGenreUpdate || needsCountryRestore) {
             const payload = {
-              roomOwner: details.roomOwner,
-              username: details.username,
-              roomName: details.roomName,
-              roomDesc: details.roomDesc,
+              roomName: ROOM_NAME,
+              roomDesc: newDesc,
               roomGenre: cleanGenres,
-              roomCountry: blobId,
-              maxParticipants: details.maxParticipants,
-              isPublicRoom: details.isPublicRoom
+              roomCountry: "IN",
+              maxParticipants: details.maxParticipants || 50
             };
             const { getGroicHeaders } = require("./api");
             await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
               headers: getGroicHeaders(),
               timeout: 10000
             });
-            console.log("[Handlers] Cleaned up legacy tags from room genres.");
+            console.log("[Handlers] Updated room details, description with invisible JSON Blob ID, and restored country database.");
           }
           return;
         }
@@ -117,12 +180,13 @@ async function syncAllowedAdminsFromCloud(roomUid) {
       }
     }
 
-    // If no UUID found in roomCountry, create a new JSON Blob
+    // If no UUID found, create a new JSON Blob
     console.log("[Handlers] Creating a new cloud JSON Blob for allowed admins...");
     const localList = loadAllowedAdmins();
     const createRes = await axios.post("https://jsonblob.com/api/jsonBlob", localList, {
       headers: { "Content-Type": "application/json" },
-      timeout: 10000
+      timeout: 10000,
+      proxy: false
     });
 
     const location = createRes.headers["location"] || "";
@@ -133,16 +197,16 @@ async function syncAllowedAdminsFromCloud(roomUid) {
 
     console.log(`[Handlers] New JSON Blob ID created: ${newBlobId}`);
 
-    // Register the new blob ID in roomCountry and clear genres tags
+    const baseDesc = desc.replace(/[\u200C\u200D\u200B]+/g, "").trim();
+    const targetDesc = ROOM_DESC || baseDesc;
+    const newDesc = `${targetDesc}\n\n${encodeUUID(newBlobId)}`.trim();
+
     const payload = {
-      roomOwner: details.roomOwner,
-      username: details.username,
-      roomName: details.roomName,
-      roomDesc: details.roomDesc,
+      roomName: ROOM_NAME,
+      roomDesc: newDesc,
       roomGenre: cleanGenres,
-      roomCountry: newBlobId,
-      maxParticipants: details.maxParticipants,
-      isPublicRoom: details.isPublicRoom
+      roomCountry: "IN",
+      maxParticipants: details.maxParticipants || 50
     };
 
     const { getGroicHeaders } = require("./api");
@@ -150,33 +214,61 @@ async function syncAllowedAdminsFromCloud(roomUid) {
       headers: getGroicHeaders(),
       timeout: 10000
     });
-    console.log("[Handlers] Registered JSON Blob ID in roomCountry on Groic.");
+    console.log("[Handlers] Registered JSON Blob ID in room description invisibly.");
   } catch (err) {
-    console.error("[Handlers] Cloud sync failed:", err.message);
+    if (err.response) {
+      console.error("[Handlers] Cloud sync failed response status:", err.response.status);
+      console.error("[Handlers] Cloud sync failed response data:", JSON.stringify(err.response.data));
+    } else {
+      console.error("[Handlers] Cloud sync failed:", err.message);
+    }
   }
 }
 
 async function saveAllowedAdminsAndSync(list, roomUid) {
   saveAllowedAdmins(list);
+  const envBlobId = process.env.ALLOWED_ADMINS_BLOB_ID;
+  if (envBlobId) {
+    console.log(`[Handlers] Syncing allowed admins to env blob ID: ${envBlobId}`);
+    try {
+      const axios = require("axios");
+      await axios.put(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, list, {
+        headers: { "Content-Type": "application/json" },
+        timeout: 10000,
+        proxy: false
+      });
+      console.log(`[Handlers] Successfully updated cloud JSON Blob ${envBlobId} with allowed admins.`);
+    } catch (err) {
+      console.error("[Handlers] Failed to update cloud allowed admins:", err.message);
+    }
+    return;
+  }
+
   try {
     const details = await getRoomDetails(roomUid);
     if (!details) return;
 
-    const countryVal = (details.roomCountry || "").trim();
-    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
-    const axios = require("axios");
+    const desc = details.roomDesc || "";
+    let blobId = decodeUUID(desc);
 
-    let blobId = isUuid ? countryVal : null;
+    const countryVal = (details.roomCountry || "").trim();
+    const countryIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
+
+    if (!blobId && countryIsUuid) {
+      blobId = countryVal;
+    }
 
     if (!blobId) {
-      console.log("[Handlers] No JSON Blob found in roomCountry during save. Triggering sync to create one...");
+      console.log("[Handlers] No JSON Blob found in roomDesc during save. Triggering sync to create one...");
       await syncAllowedAdminsFromCloud(roomUid);
       return;
     }
 
+    const axios = require("axios");
     await axios.put(`https://jsonblob.com/api/jsonBlob/${blobId}`, list, {
       headers: { "Content-Type": "application/json" },
-      timeout: 10000
+      timeout: 10000,
+      proxy: false
     });
     console.log(`[Handlers] Successfully updated cloud JSON Blob ${blobId} with allowed admins.`);
   } catch (err) {
@@ -205,7 +297,7 @@ function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: " ",
+      username: OWNER_USERNAME,
       name: " ",
       imageUrl: "",
       isBot: false
@@ -236,7 +328,7 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: " ",
+      username: OWNER_USERNAME,
       name: " ",
       imageUrl: "",
       isBot: false
@@ -265,7 +357,7 @@ function emitAdminControlForRoom(roomUid, enableAdminControl) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: " ",
+      username: OWNER_USERNAME,
       name: " ",
       imageUrl: "",
       isBot: false
@@ -429,6 +521,9 @@ function setupChatHandler(roomUid) {
   if (socket) {
     socket.off("chat"); // remove old listener before re-adding (prevents duplicates on reconnect)
     socket.on("chat", async (data) => {
+      console.log("=== RECEIVED CHAT EVENT ===");
+      console.log(JSON.stringify(data, null, 2));
+      console.log("===========================");
       const rawMessage = (data?.message || "").trim();
       let message = rawMessage;
       if (message.startsWith("!")) {
@@ -589,14 +684,11 @@ function setupChatHandler(roomUid) {
         const targetUser = message.slice("!kick_all rooms ".length).trim();
         if (!targetUser) return;
 
-        sendChatMessage(`KD: Finding all public rooms to kick @${targetUser}...`, roomUid);
 
         getActivePublicRooms().then(async (rooms) => {
           if (!rooms || rooms.length === 0) {
-            sendChatMessage(`KD: No active public rooms found.`, roomUid);
             return;
           }
-          sendChatMessage(`KD: Found ${rooms.length} active public rooms. Kicking @${targetUser}...`, roomUid);
 
           let kickedCount = 0;
           for (let i = 0; i < rooms.length; i++) {
@@ -612,11 +704,9 @@ function setupChatHandler(roomUid) {
                 continue;
               }
 
-              const res = await updateRoomKickList(currentRoomUid, targetUser, true);
-              if (res && !res.error) {
-                emitKickUserForRoom(currentRoomUid, targetUser, true);
-                kickedCount++;
-              }
+              emitKickUserForRoom(currentRoomUid, targetUser, true);
+              updateRoomKickList(currentRoomUid, targetUser, true).catch(() => { });
+              kickedCount++;
             } catch (err) {
               console.error(`Failed to kick ${targetUser} in room ${currentRoomUid}:`, err.message);
             }
@@ -624,9 +714,8 @@ function setupChatHandler(roomUid) {
               await new Promise(r => setTimeout(r, 1000));
             }
           }
-          sendChatMessage(`KD: Finished processing all rooms. Kicked @${targetUser} from ${kickedCount} new rooms.`, roomUid);
         }).catch((err) => {
-          sendChatMessage(`KD: Failed to retrieve active public rooms: ${err.message}`, roomUid);
+          console.error(`Failed to retrieve active public rooms:`, err.message);
         });
       } else if (message.toLowerCase().startsWith("!unkick_all rooms ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
@@ -636,14 +725,10 @@ function setupChatHandler(roomUid) {
         const targetUser = message.slice("!unkick_all rooms ".length).trim();
         if (!targetUser) return;
 
-        sendChatMessage(`KD: Finding all public rooms to unkick @${targetUser}...`, roomUid);
-
         getActivePublicRooms().then(async (rooms) => {
           if (!rooms || rooms.length === 0) {
-            sendChatMessage(`KD: No active public rooms found.`, roomUid);
             return;
           }
-          sendChatMessage(`KD: Found ${rooms.length} active public rooms. Unkicking @${targetUser}...`, roomUid);
 
           let unkickedCount = 0;
           for (let i = 0; i < rooms.length; i++) {
@@ -659,11 +744,9 @@ function setupChatHandler(roomUid) {
                 continue;
               }
 
-              const res = await updateRoomKickList(currentRoomUid, targetUser, false);
-              if (res && !res.error) {
-                emitKickUserForRoom(currentRoomUid, targetUser, false);
-                unkickedCount++;
-              }
+              emitKickUserForRoom(currentRoomUid, targetUser, false);
+              updateRoomKickList(currentRoomUid, targetUser, false).catch(() => { });
+              unkickedCount++;
             } catch (err) {
               console.error(`Failed to unkick ${targetUser} in room ${currentRoomUid}:`, err.message);
             }
@@ -671,9 +754,8 @@ function setupChatHandler(roomUid) {
               await new Promise(r => setTimeout(r, 1000));
             }
           }
-          sendChatMessage(`KD: Finished processing all rooms. Unkicked @${targetUser} from ${unkickedCount} rooms.`, roomUid);
         }).catch((err) => {
-          sendChatMessage(`KD: Failed to retrieve active public rooms: ${err.message}`, roomUid);
+          console.error(`Failed to retrieve active public rooms:`, err.message);
         });
       } else if (message.toLowerCase().startsWith("!kick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
@@ -694,15 +776,10 @@ function setupChatHandler(roomUid) {
         // Protection: Only room owner can kick allowed admins
         const normalizedTarget = targetUser.toLowerCase().trim();
         if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: Cant perform this on co-owners`, roomUid);
           return;
         }
 
-        updateRoomKickList(targetRoomUid, targetUser, true).then(res => {
-          if (res && !res.error) {
-            emitKickUserForRoom(targetRoomUid, targetUser, true);
-          }
-        }).catch(() => { });
+        emitKickUserForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!kick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -714,14 +791,10 @@ function setupChatHandler(roomUid) {
         // Protection: Only room owner can kick allowed admins
         const normalizedTarget = targetUser.toLowerCase().trim();
         if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
           return;
         }
 
-        emit("kickUser", {
-          username: targetUser,
-          addOrRemove: true
-        });
+        emitKickUserForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unkick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -736,11 +809,7 @@ function setupChatHandler(roomUid) {
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
-        updateRoomKickList(targetRoomUid, targetUser, false).then(res => {
-          if (res && !res.error) {
-            emitKickUserForRoom(targetRoomUid, targetUser, false);
-          }
-        }).catch(() => { });
+        emitKickUserForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!unkick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -749,10 +818,7 @@ function setupChatHandler(roomUid) {
         const targetUser = message.slice("!unkick ".length).trim();
         if (!targetUser) return;
 
-        emit("kickUser", {
-          username: targetUser,
-          addOrRemove: false
-        });
+        emitKickUserForRoom(roomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!admin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -767,18 +833,7 @@ function setupChatHandler(roomUid) {
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
-        getRoomDetails(targetRoomUid).then(details => {
-          if (!details) return;
-
-          const adminsList = details.admins || [];
-          if (adminsList.includes(targetUser)) return;
-
-          updateRoomAdminList(targetRoomUid, targetUser, true).then(res => {
-            if (res && !res.error) {
-              emitAddAdminForRoom(targetRoomUid, targetUser, true);
-            }
-          });
-        }).catch(() => { });
+        emitAddAdminForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase() === "!admin" || message.toLowerCase().startsWith("!admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -790,19 +845,7 @@ function setupChatHandler(roomUid) {
 
         if (!targetUser || targetUser === "someone") return;
 
-        getRoomDetails(roomUid).then(details => {
-          const adminsList = details?.admins || [];
-          if (adminsList.includes(targetUser)) return;
-
-          updateRoomAdminList(roomUid, targetUser, true).then(res => {
-            if (res && !res.error) {
-              const isCurrentlySocketAdmin = currentAdmins.includes(targetUser);
-              if (!isCurrentlySocketAdmin) {
-                emit("addAdmin", targetUser);
-              }
-            }
-          });
-        }).catch(() => { });
+        emitAddAdminForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unadmin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -820,22 +863,10 @@ function setupChatHandler(roomUid) {
         // Protection: Only room owner can unadmin allowed admins
         const normalizedTarget = targetUser.toLowerCase().trim();
         if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
           return;
         }
 
-        getRoomDetails(targetRoomUid).then(details => {
-          if (!details) return;
-
-          const adminsList = details.admins || [];
-          if (!adminsList.includes(targetUser)) return;
-
-          updateRoomAdminList(targetRoomUid, targetUser, false).then(res => {
-            if (res && !res.error) {
-              emitAddAdminForRoom(targetRoomUid, targetUser, false);
-            }
-          });
-        }).catch(() => { });
+        emitAddAdminForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase() === "!unadmin" || message.toLowerCase().startsWith("!unadmin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
           return;
@@ -850,23 +881,10 @@ function setupChatHandler(roomUid) {
         // Protection: Only room owner can unadmin allowed admins
         const normalizedTarget = targetUser.toLowerCase().trim();
         if (loadAllowedAdmins().includes(normalizedTarget) && senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: Cant perform this on co-owner of the room`, roomUid);
           return;
         }
 
-        getRoomDetails(roomUid).then(details => {
-          const adminsList = details?.admins || [];
-          if (!adminsList.includes(targetUser)) return;
-
-          updateRoomAdminList(roomUid, targetUser, false).then(res => {
-            if (res && !res.error) {
-              const isCurrentlySocketAdmin = currentAdmins.includes(targetUser);
-              if (isCurrentlySocketAdmin) {
-                emit("addAdmin", targetUser);
-              }
-            }
-          });
-        }).catch(() => { });
+        emitAddAdminForRoom(roomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!allow ") || message.toLowerCase().startsWith("! allow ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
           return;
@@ -930,11 +948,9 @@ function setupChatHandler(roomUid) {
         }
 
         if (targetRoomUid === roomUid) {
-          emit("adminControl", true);
-          updateRoomAdminControl(roomUid, true).catch(() => { });
+          emitAdminControlForRoom(roomUid, true);
         } else {
           emitAdminControlForRoom(targetRoomUid, true);
-          updateRoomAdminControl(targetRoomUid, true).catch(() => { });
         }
       } else if (lowerMsg === "!disable admin" || lowerMsg.startsWith("!disable admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
@@ -947,11 +963,9 @@ function setupChatHandler(roomUid) {
         }
 
         if (targetRoomUid === roomUid) {
-          emit("adminControl", false);
-          updateRoomAdminControl(roomUid, false).catch(() => { });
+          emitAdminControlForRoom(roomUid, false);
         } else {
           emitAdminControlForRoom(targetRoomUid, false);
-          updateRoomAdminControl(targetRoomUid, false).catch(() => { });
         }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history

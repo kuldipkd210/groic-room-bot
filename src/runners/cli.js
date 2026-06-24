@@ -370,7 +370,9 @@ async function run() {
       console.log("\n================ ROOM STATUS ================");
       console.log(`Room UID:    ${details.roomUid}`);
       console.log(`Room Name:   ${details.roomName}`);
-      console.log(`Description: ${details.roomDesc || "(no description)"}`);
+      const rawDesc = details.roomDesc || "(no description)";
+      const cleanDesc = rawDesc.replace(/[\u200C\u200D]{128}/g, "").trim();
+      console.log(`Description: ${cleanDesc}`);
       console.log(`Genre:       ${details.roomGenre.join(", ")}`);
       console.log(`Country/DB:  ${details.roomCountry || "IN"}`);
       console.log(`Visibility:  ${details.isPublicRoom ? "PUBLIC 🟢 (Visible in lobby)" : "PRIVATE 🔴 (Hidden from lobby)"}`);

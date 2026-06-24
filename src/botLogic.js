@@ -12,6 +12,11 @@ let botStarted = false;
 let isStarting = false;
 let tokenRefreshInterval = null;
 let reconnectingChecks = 0;
+let lastHeartbeatAt = null; // Tracks last presenceUpdate time for proxy health watchdog
+
+function recordHeartbeat() {
+  lastHeartbeatAt = Date.now();
+}
 
 function cleanupRuntime() {
   const socket = getSocket();
@@ -84,7 +89,13 @@ async function startBot() {
           username: BOT_USERNAME,
           name: BOT_NAME,
           imageUrl: BOT_IMAGE_URL,
-          isBot: true
+          isBot: false
+        });
+
+        // Reset heartbeat on connect
+        lastHeartbeatAt = Date.now();
+        socket.on("presenceUpdate", () => {
+          lastHeartbeatAt = Date.now();
         });
 
         // console.log("BOT JOINED ROOM (EMPTY IDENTITY)");
@@ -128,6 +139,17 @@ async function runForever() {
 
       if (isConnected) {
         reconnectingChecks = 0;
+      }
+
+      // Proxy health watchdog: if socket thinks it's connected but no presenceUpdate
+      // has arrived in the last 3 minutes, the proxy tunnel has silently dropped.
+      const PROXY_TIMEOUT_MS = 3 * 60 * 1000; // 3 minutes
+      if (isConnected && lastHeartbeatAt !== null && (Date.now() - lastHeartbeatAt) > PROXY_TIMEOUT_MS) {
+        console.log("[Watchdog] No presenceUpdate in 3+ minutes. Proxy may be dead. Forcing restart...");
+        lastHeartbeatAt = null;
+        await startBot();
+        await sleep(30000);
+        continue;
       }
 
       if (!isConnected && !isReconnecting) {
