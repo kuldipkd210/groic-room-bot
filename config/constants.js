@@ -4,9 +4,9 @@ module.exports = {
   BOT_USERNAME: " ",
   BOT_NAME: " ",
   BOT_IMAGE_URL: "https://i.ibb.co/wNVgfQRK/fgdsgf.jpg",
-  ROOM_NAME: "01101011 01100100",
-  ROOM_DESC: "There are 10 types of people: those who get it, and those who don’t!",
-  ROOM_GENRE: ["KD-Special"],
+  ROOM_NAME: "北方の狼",
+  ROOM_DESC: "この部屋への南インド人の立ち入りは禁止されています。",
+  ROOM_GENRE: ["Viraha", "Shab-e-Hijr"],
   MAX_PARTICIPANTS: 50,
   ROOM_FILE: "room.json"
 };

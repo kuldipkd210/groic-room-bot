@@ -2,34 +2,157 @@ const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
-const { updateRoomKickList, updateRoomAdminList, getRoomDetails, updateRoomAdminControl } = require("./api");
+const { updateRoomKickList, updateRoomAdminList, getRoomDetails, updateRoomAdminControl, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
 
 const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
+let allowedAdminsCache = [];
+
 function loadAllowedAdmins() {
-  const defaultAdmins = ["_darth_vader_", "dedsec_404", "_its_shru_"];
-  if (!fs.existsSync(ALLOWED_ADMINS_FILE)) {
-    return defaultAdmins.map(u => u.toLowerCase().trim());
-  }
-  try {
-    const list = JSON.parse(fs.readFileSync(ALLOWED_ADMINS_FILE, "utf8"));
-    if (Array.isArray(list)) {
-      return list.map(u => u.toLowerCase().trim());
+  if (allowedAdminsCache.length === 0) {
+    const defaultAdmins = ["_darth_vader_", "dedsec_404", "_its_shru_"];
+    if (!fs.existsSync(ALLOWED_ADMINS_FILE)) {
+      allowedAdminsCache = defaultAdmins.map(u => u.toLowerCase().trim());
+    } else {
+      try {
+        const list = JSON.parse(fs.readFileSync(ALLOWED_ADMINS_FILE, "utf8"));
+        if (Array.isArray(list)) {
+          allowedAdminsCache = list.map(u => u.toLowerCase().trim());
+        }
+      } catch (err) {
+        console.error("Failed to load allowed_admins.json, using defaults", err);
+        allowedAdminsCache = defaultAdmins.map(u => u.toLowerCase().trim());
+      }
     }
-  } catch (err) {
-    console.error("Failed to load allowed_admins.json, using defaults", err);
   }
-  return defaultAdmins.map(u => u.toLowerCase().trim());
+  return allowedAdminsCache;
 }
 
 function saveAllowedAdmins(adminsList) {
+  allowedAdminsCache = adminsList.map(u => u.toLowerCase().trim());
   try {
-    fs.writeFileSync(ALLOWED_ADMINS_FILE, JSON.stringify(adminsList, null, 2));
+    fs.writeFileSync(ALLOWED_ADMINS_FILE, JSON.stringify(allowedAdminsCache, null, 2));
   } catch (err) {
     console.error("Failed to save allowed_admins.json", err);
+  }
+}
+
+async function syncAllowedAdminsFromCloud(roomUid) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) return;
+
+    const countryVal = (details.roomCountry || "").trim();
+    // A JSON Blob ID is a UUID (36 chars: 8-4-4-4-12 hex chars)
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
+    const axios = require("axios");
+
+    // Clean up any old jsonblob: or co-owner: tags from genres if present
+    const cleanGenres = (details.roomGenre || []).filter(g => !g.startsWith("jsonblob:") && !g.startsWith("co-owner:"));
+
+    if (isUuid) {
+      const blobId = countryVal;
+      console.log(`[Handlers] Found JSON Blob ID in roomCountry: ${blobId}`);
+      try {
+        const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, { timeout: 10000 });
+        if (Array.isArray(res.data)) {
+          const fromCloud = res.data.map(u => u.toLowerCase().trim());
+          saveAllowedAdmins(fromCloud);
+          console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
+          
+          // If we had old genres to clean, do a patch now
+          if (details.roomGenre && details.roomGenre.length !== cleanGenres.length) {
+            const payload = {
+              roomOwner: details.roomOwner,
+              username: details.username,
+              roomName: details.roomName,
+              roomDesc: details.roomDesc,
+              roomGenre: cleanGenres,
+              roomCountry: blobId,
+              maxParticipants: details.maxParticipants,
+              isPublicRoom: details.isPublicRoom
+            };
+            const { getGroicHeaders } = require("./api");
+            await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+              headers: getGroicHeaders(),
+              timeout: 10000
+            });
+            console.log("[Handlers] Cleaned up legacy tags from room genres.");
+          }
+          return;
+        }
+      } catch (getErr) {
+        console.error(`[Handlers] Failed to read JSON Blob ${blobId}:`, getErr.message);
+      }
+    }
+
+    // If no UUID found in roomCountry, create a new JSON Blob
+    console.log("[Handlers] Creating a new cloud JSON Blob for allowed admins...");
+    const localList = loadAllowedAdmins();
+    const createRes = await axios.post("https://jsonblob.com/api/jsonBlob", localList, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 10000
+    });
+
+    const location = createRes.headers["location"] || "";
+    const newBlobId = location.split("/").pop();
+    if (!newBlobId) {
+      throw new Error("Failed to retrieve new JSON Blob ID from location header");
+    }
+
+    console.log(`[Handlers] New JSON Blob ID created: ${newBlobId}`);
+    
+    // Register the new blob ID in roomCountry and clear genres tags
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: cleanGenres,
+      roomCountry: newBlobId,
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom
+    };
+
+    const { getGroicHeaders } = require("./api");
+    await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      timeout: 10000
+    });
+    console.log("[Handlers] Registered JSON Blob ID in roomCountry on Groic.");
+  } catch (err) {
+    console.error("[Handlers] Cloud sync failed:", err.message);
+  }
+}
+
+async function saveAllowedAdminsAndSync(list, roomUid) {
+  saveAllowedAdmins(list);
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) return;
+
+    const countryVal = (details.roomCountry || "").trim();
+    const isUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
+    const axios = require("axios");
+
+    let blobId = isUuid ? countryVal : null;
+
+    if (!blobId) {
+      console.log("[Handlers] No JSON Blob found in roomCountry during save. Triggering sync to create one...");
+      await syncAllowedAdminsFromCloud(roomUid);
+      return;
+    }
+
+    await axios.put(`https://jsonblob.com/api/jsonBlob/${blobId}`, list, {
+      headers: { "Content-Type": "application/json" },
+      timeout: 10000
+    });
+    console.log(`[Handlers] Successfully updated cloud JSON Blob ${blobId} with allowed admins.`);
+  } catch (err) {
+    console.error("[Handlers] Failed to update cloud allowed admins:", err.message);
   }
 }
 
@@ -264,6 +387,9 @@ function stopHandlers() {
 }
 
 function setupChatHandler(roomUid) {
+  // Sync allowed admins from cloud
+  syncAllowedAdminsFromCloud(roomUid);
+
   const socket = getSocket();
   if (socket) {
     socket.off("chat"); // remove old listener before re-adding (prevents duplicates on reconnect)
@@ -420,9 +546,102 @@ function setupChatHandler(roomUid) {
             sendChatMessage(`KD : I couldn't get an answer right now.`, roomUid);
           }
         }
+      } else if (message.toLowerCase().startsWith("!kick_all rooms ")) {
+        if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          return;
+        }
+
+        const targetUser = message.slice("!kick_all rooms ".length).trim();
+        if (!targetUser) return;
+
+        sendChatMessage(`KD: Finding all public rooms to kick @${targetUser}...`, roomUid);
+
+        getActivePublicRooms().then(async (rooms) => {
+          if (!rooms || rooms.length === 0) {
+            sendChatMessage(`KD: No active public rooms found.`, roomUid);
+            return;
+          }
+          sendChatMessage(`KD: Found ${rooms.length} active public rooms. Kicking @${targetUser}...`, roomUid);
+
+          let kickedCount = 0;
+          for (let i = 0; i < rooms.length; i++) {
+            const currentRoom = rooms[i];
+            const currentRoomUid = currentRoom.roomUid;
+            
+            try {
+              const details = await getRoomDetails(currentRoomUid);
+              if (!details) continue;
+              
+              const kickedList = details.kicked || [];
+              if (kickedList.includes(targetUser)) {
+                continue;
+              }
+
+              const res = await updateRoomKickList(currentRoomUid, targetUser, true);
+              if (res && !res.error) {
+                emitKickUserForRoom(currentRoomUid, targetUser, true);
+                kickedCount++;
+              }
+            } catch (err) {
+              console.error(`Failed to kick ${targetUser} in room ${currentRoomUid}:`, err.message);
+            }
+            if (i < rooms.length - 1) {
+              await new Promise(r => setTimeout(r, 1000));
+            }
+          }
+          sendChatMessage(`KD: Finished processing all rooms. Kicked @${targetUser} from ${kickedCount} new rooms.`, roomUid);
+        }).catch((err) => {
+          sendChatMessage(`KD: Failed to retrieve active public rooms: ${err.message}`, roomUid);
+        });
+      } else if (message.toLowerCase().startsWith("!unkick_all rooms ")) {
+        if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
+          return;
+        }
+
+        const targetUser = message.slice("!unkick_all rooms ".length).trim();
+        if (!targetUser) return;
+
+        sendChatMessage(`KD: Finding all public rooms to unkick @${targetUser}...`, roomUid);
+
+        getActivePublicRooms().then(async (rooms) => {
+          if (!rooms || rooms.length === 0) {
+            sendChatMessage(`KD: No active public rooms found.`, roomUid);
+            return;
+          }
+          sendChatMessage(`KD: Found ${rooms.length} active public rooms. Unkicking @${targetUser}...`, roomUid);
+
+          let unkickedCount = 0;
+          for (let i = 0; i < rooms.length; i++) {
+            const currentRoom = rooms[i];
+            const currentRoomUid = currentRoom.roomUid;
+            
+            try {
+              const details = await getRoomDetails(currentRoomUid);
+              if (!details) continue;
+              
+              const kickedList = details.kicked || [];
+              if (!kickedList.includes(targetUser)) {
+                continue;
+              }
+
+              const res = await updateRoomKickList(currentRoomUid, targetUser, false);
+              if (res && !res.error) {
+                emitKickUserForRoom(currentRoomUid, targetUser, false);
+                unkickedCount++;
+              }
+            } catch (err) {
+              console.error(`Failed to unkick ${targetUser} in room ${currentRoomUid}:`, err.message);
+            }
+            if (i < rooms.length - 1) {
+              await new Promise(r => setTimeout(r, 1000));
+            }
+          }
+          sendChatMessage(`KD: Finished processing all rooms. Unkicked @${targetUser} from ${unkickedCount} rooms.`, roomUid);
+        }).catch((err) => {
+          sendChatMessage(`KD: Failed to retrieve active public rooms: ${err.message}`, roomUid);
+        });
       } else if (message.toLowerCase().startsWith("!kick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -451,7 +670,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase().startsWith("!kick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -471,7 +689,6 @@ function setupChatHandler(roomUid) {
         });
       } else if (message.toLowerCase().startsWith("!unkick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -491,7 +708,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase().startsWith("!unkick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -504,7 +720,6 @@ function setupChatHandler(roomUid) {
         });
       } else if (message.toLowerCase().startsWith("!admin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -531,7 +746,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase() === "!admin" || message.toLowerCase().startsWith("!admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -556,7 +770,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase().startsWith("!unadmin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -590,7 +803,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase() === "!unadmin" || message.toLowerCase().startsWith("!unadmin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -622,7 +834,6 @@ function setupChatHandler(roomUid) {
         }).catch(() => { });
       } else if (message.toLowerCase().startsWith("!allow ") || message.toLowerCase().startsWith("! allow ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -640,10 +851,9 @@ function setupChatHandler(roomUid) {
         if (currentAdminsList.includes(normalizedTarget)) return;
 
         currentAdminsList.push(normalizedTarget);
-        saveAllowedAdmins(currentAdminsList);
+        saveAllowedAdminsAndSync(currentAdminsList, roomUid);
       } else if (message.toLowerCase().startsWith("!revoke ") || message.toLowerCase().startsWith("! revoke ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 
@@ -661,10 +871,9 @@ function setupChatHandler(roomUid) {
         if (!currentAdminsList.includes(normalizedTarget)) return;
 
         const updatedAdmins = currentAdminsList.filter(u => u !== normalizedTarget);
-        saveAllowedAdmins(updatedAdmins);
+        saveAllowedAdminsAndSync(updatedAdmins, roomUid);
       } else if (message.toLowerCase() === "!allowed" || message.toLowerCase() === "! allowed") {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: You are not allowed to perform this action.`, roomUid);
           return;
         }
 

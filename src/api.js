@@ -337,6 +337,36 @@ async function clearRoomGhosts(roomUid) {
   }
 }
 
+async function getActivePublicRooms() {
+  try {
+    let allRooms = [];
+    let page = 1;
+    const limit = 50;
+    while (true) {
+      const res = await axios.get(`https://api.groic.in/api/room/filtered-rooms/?page=${page}&limit=${limit}`, {
+        headers: getGroicHeaders(),
+        ...(httpsAgent ? { httpsAgent } : {}),
+        timeout: 15000
+      });
+      const rooms = res.data.data || [];
+      if (rooms.length === 0) {
+        break;
+      }
+      allRooms.push(...rooms);
+      if (rooms.length < limit) {
+        break;
+      }
+      page++;
+      await new Promise(resolve => setTimeout(resolve, 150));
+    }
+    return allRooms;
+  } catch (err) {
+    logAxiosError(err, "Could not fetch active public rooms");
+    return [];
+  }
+}
+
+
 module.exports = {
   createRoom,
   getRoomDetails,
@@ -348,6 +378,7 @@ module.exports = {
   updateRoomEngagement,
   clearRoomKickList,
   updateRoomAdminControl,
-  clearRoomGhosts
+  clearRoomGhosts,
+  getActivePublicRooms
 };
 

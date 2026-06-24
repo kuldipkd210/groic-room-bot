@@ -6,7 +6,8 @@ const {
   updateRoomKickList, 
   updateRoomAdminList,
   clearRoomKickList,
-  clearRoomGhosts
+  clearRoomGhosts,
+  getActivePublicRooms
 } = require("../api");
 const { loadRoomUid } = require("../storage");
 const { createSocketInstance } = require("../socket");
@@ -156,7 +157,7 @@ async function socketEmitClearKicks(roomUid, kickedUsernames) {
 
 async function run() {
   const action = process.argv[2];
-  if (!action || !["private", "public", "status", "engagement", "kick", "unkick", "clear-kicks", "add-admin", "remove-admin", "clear-ghosts"].includes(action.toLowerCase())) {
+  if (!action || !["private", "public", "status", "engagement", "kick", "unkick", "clear-kicks", "add-admin", "remove-admin", "clear-ghosts", "list-rooms", "kick-all", "unkick-all"].includes(action.toLowerCase())) {
     console.error("Usage:\n" +
       "  node roomAction.js status [roomUid]\n" +
       "  node roomAction.js public [roomUid]\n" +
@@ -167,7 +168,10 @@ async function run() {
       "  node roomAction.js clear-kicks [roomUid]\n" +
       "  node roomAction.js add-admin [roomUid] <username>\n" +
       "  node roomAction.js remove-admin [roomUid] <username>\n" +
-      "  node roomAction.js clear-ghosts [roomUid]\n"
+      "  node roomAction.js clear-ghosts [roomUid]\n" +
+      "  node roomAction.js list-rooms\n" +
+      "  node roomAction.js kick-all <username>\n" +
+      "  node roomAction.js unkick-all <username>\n"
     );
     process.exit(1);
   }
@@ -192,6 +196,8 @@ async function run() {
       joins = parseInt(process.argv[5]) || 10000;
       messages = parseInt(process.argv[6]) || 50000;
     }
+  } else if (["kick-all", "unkick-all"].includes(action.toLowerCase())) {
+    targetUsername = process.argv[3];
   } else if (["kick", "unkick", "add-admin", "remove-admin"].includes(action.toLowerCase())) {
     if (process.argv[4]) {
       roomUid = process.argv[3];
@@ -200,16 +206,16 @@ async function run() {
       roomUid = loadRoomUid();
       targetUsername = process.argv[3];
     }
-  } else {
+  } else if (action.toLowerCase() !== "list-rooms") {
     roomUid = arg3 || loadRoomUid();
   }
 
-  if (!roomUid) {
+  if (action.toLowerCase() !== "list-rooms" && action.toLowerCase() !== "kick-all" && action.toLowerCase() !== "unkick-all" && !roomUid) {
     console.error("Error: No roomUid found in room.json or specified in arguments");
     process.exit(1);
   }
 
-  if (["kick", "unkick", "add-admin", "remove-admin"].includes(action.toLowerCase()) && !targetUsername) {
+  if (["kick", "unkick", "add-admin", "remove-admin", "kick-all", "unkick-all"].includes(action.toLowerCase()) && !targetUsername) {
     console.error(`Error: Action '${action}' requires a username.`);
     process.exit(1);
   }
@@ -218,7 +224,142 @@ async function run() {
     console.log(`Authenticating...`);
     await refreshAccessToken();
 
-    if (action.toLowerCase() === "status") {
+    if (action.toLowerCase() === "list-rooms") {
+      console.log("Fetching active public rooms...");
+      const rooms = await getActivePublicRooms();
+      console.log(`\nFound ${rooms.length} active public rooms:\n`);
+      console.log(
+        String("Room Name").padEnd(30) +
+        String("Owner").padEnd(15) +
+        String("Room UID").padEnd(12) +
+        String("Users").padEnd(8) +
+        String("Current Song").padEnd(40)
+      );
+      console.log("-".repeat(105));
+      for (const room of rooms) {
+        const roomName = (room.roomName || "Unnamed Room").slice(0, 28);
+        const owner = (room.roomOwner || room.username || "Unknown").slice(0, 13);
+        const roomUidVal = room.roomUid || "N/A";
+        const userCount = room.activeUsers ? room.activeUsers.length : 0;
+        
+        let currentSong = "None";
+        if (room.musicStreaming && room.musicStreaming.title) {
+          currentSong = `${room.musicStreaming.title} (${room.musicStreaming.artist || "Unknown"})`;
+        }
+        currentSong = currentSong.slice(0, 38);
+
+        console.log(
+          roomName.padEnd(30) +
+          owner.padEnd(15) +
+          roomUidVal.padEnd(12) +
+          String(userCount).padEnd(8) +
+          currentSong.padEnd(40)
+        );
+      }
+      console.log("");
+    } else if (action.toLowerCase() === "kick-all") {
+      console.log("Fetching active public rooms...");
+      const rooms = await getActivePublicRooms();
+      if (!rooms || rooms.length === 0) {
+        console.log("No active public rooms found.");
+      } else {
+        console.log(`Found ${rooms.length} active public rooms. Proceeding to kick user '${targetUsername}' from all of them...\n`);
+        for (let i = 0; i < rooms.length; i++) {
+          const room = rooms[i];
+          const currentRoomUid = room.roomUid;
+          const roomName = room.roomName || "Unnamed Room";
+          console.log(`[${i + 1}/${rooms.length}] Room: ${roomName} (${currentRoomUid})`);
+
+          try {
+            const details = await getRoomDetails(currentRoomUid);
+            if (!details) {
+              console.error(`  [-] Could not retrieve room details for ${currentRoomUid}`);
+              console.log("-".repeat(50));
+              continue;
+            }
+            const kickedList = details.kicked || [];
+            const isAlreadyKicked = kickedList.includes(targetUsername);
+
+            if (isAlreadyKicked) {
+              console.log(`  [-] User ${targetUsername} is already kicked in room ${currentRoomUid}. No action needed.`);
+            } else {
+              console.log(`  [*] Adding ${targetUsername} to kick list...`);
+              const res = await updateRoomKickList(currentRoomUid, targetUsername, true);
+              if (res && !res.error) {
+                console.log(`  [+] Success: Added ${targetUsername} to kick list in room ${currentRoomUid}.`);
+                try {
+                  console.log(`  [*] Propagating kick via Socket...`);
+                  await socketEmitKickUser(currentRoomUid, targetUsername, true);
+                  console.log("  [+] Socket propagation completed.");
+                } catch (socketErr) {
+                  console.error("  [!] Warning: Failed to propagate kick update via socket:", socketErr.message);
+                }
+              } else {
+                console.error(`  [-] Failed to update kick list for user ${targetUsername} in room ${currentRoomUid}.`);
+              }
+            }
+          } catch (roomErr) {
+            console.error(`  [!] Error processing room ${currentRoomUid}:`, roomErr.message);
+          }
+          console.log("-".repeat(50));
+          if (i < rooms.length - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        console.log("\nFinished processing all rooms.");
+      }
+    } else if (action.toLowerCase() === "unkick-all") {
+      console.log("Fetching active public rooms...");
+      const rooms = await getActivePublicRooms();
+      if (!rooms || rooms.length === 0) {
+        console.log("No active public rooms found.");
+      } else {
+        console.log(`Found ${rooms.length} active public rooms. Proceeding to unkick user '${targetUsername}' from all of them...\n`);
+        for (let i = 0; i < rooms.length; i++) {
+          const room = rooms[i];
+          const currentRoomUid = room.roomUid;
+          const roomName = room.roomName || "Unnamed Room";
+          console.log(`[${i + 1}/${rooms.length}] Room: ${roomName} (${currentRoomUid})`);
+
+          try {
+            const details = await getRoomDetails(currentRoomUid);
+            if (!details) {
+              console.error(`  [-] Could not retrieve room details for ${currentRoomUid}`);
+              console.log("-".repeat(50));
+              continue;
+            }
+            const kickedList = details.kicked || [];
+            const isAlreadyKicked = kickedList.includes(targetUsername);
+
+            if (!isAlreadyKicked) {
+              console.log(`  [-] User ${targetUsername} is not kicked in room ${currentRoomUid}. No action needed.`);
+            } else {
+              console.log(`  [*] Removing ${targetUsername} from kick list...`);
+              const res = await updateRoomKickList(currentRoomUid, targetUsername, false);
+              if (res && !res.error) {
+                console.log(`  [+] Success: Removed ${targetUsername} from kick list in room ${currentRoomUid}.`);
+                try {
+                  console.log(`  [*] Propagating unkick via Socket...`);
+                  await socketEmitKickUser(currentRoomUid, targetUsername, false);
+                  console.log("  [+] Socket propagation completed.");
+                } catch (socketErr) {
+                  console.error("  [!] Warning: Failed to propagate unkick update via socket:", socketErr.message);
+                }
+              } else {
+                console.error(`  [-] Failed to update kick list for user ${targetUsername} in room ${currentRoomUid}.`);
+              }
+            }
+          } catch (roomErr) {
+            console.error(`  [!] Error processing room ${currentRoomUid}:`, roomErr.message);
+          }
+          console.log("-".repeat(50));
+          if (i < rooms.length - 1) {
+            await new Promise(r => setTimeout(r, 1000));
+          }
+        }
+        console.log("\nFinished processing all rooms.");
+      }
+    } else if (action.toLowerCase() === "status") {
       console.log(`Fetching details for room: ${roomUid}...`);
       const details = await getRoomDetails(roomUid);
       if (!details) {
@@ -231,6 +372,7 @@ async function run() {
       console.log(`Room Name:   ${details.roomName}`);
       console.log(`Description: ${details.roomDesc || "(no description)"}`);
       console.log(`Genre:       ${details.roomGenre.join(", ")}`);
+      console.log(`Country/DB:  ${details.roomCountry || "IN"}`);
       console.log(`Visibility:  ${details.isPublicRoom ? "PUBLIC 🟢 (Visible in lobby)" : "PRIVATE 🔴 (Hidden from lobby)"}`);
       console.log(`Active Users:${details.activeUsers ? details.activeUsers.length : 0}`);
       console.log(`Admins:      ${details.admins ? details.admins.filter(Boolean).join(", ") : ""}`);
