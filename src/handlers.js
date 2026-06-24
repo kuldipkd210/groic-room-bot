@@ -332,10 +332,14 @@ function processUserList(activeUsers, roomUid) {
     if (!knownUsers.has(userKey)) {
       knownUsers.add(userKey);
       if (initialized) {
-        const randomIndex = Math.floor(Math.random() * WELCOME_MESSAGES.length);
-        const template = WELCOME_MESSAGES[randomIndex];
-        const message = template.replace("{username}", cleanUsername);
-        sendChatMessage(message, roomUid);
+        if (cleanUsername.toLowerCase() === OWNER_USERNAME.toLowerCase().trim()) {
+          sendChatMessage(`KD : Welcome back @${cleanUsername}!`, roomUid);
+        } else {
+          const randomIndex = Math.floor(Math.random() * WELCOME_MESSAGES.length);
+          const template = WELCOME_MESSAGES[randomIndex];
+          const message = template.replace("{username}", cleanUsername);
+          sendChatMessage(message, roomUid);
+        }
       }
     }
   }
