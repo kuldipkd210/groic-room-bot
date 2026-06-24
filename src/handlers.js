@@ -11,6 +11,34 @@ const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
 let allowedAdminsCache = [];
 
+const WELCOME_MESSAGES = [
+  "KD : Hey @{username}! Welcome to the room! Grab your headphones and vibe with us! 🎧✨",
+  "KD : Welcome @{username}! Let's listen to some sweet tunes and chat together! 🎶💃",
+  "KD : Look who joined! Welcome @{username}! Feel the music, drop a message, and enjoy! 🎵❤️",
+  "KD : Yay, @{username} is here! Welcome to our musical cozy corner! Let the good vibes roll! 🎸🌟",
+  "KD : Hello @{username}! Welcome to the ultimate music & chat lounge! What's your jam today? 🎙️🎉",
+  "KD : Welcome @{username}! We've got the beats, we've got the chat, all we needed was you! 🔊🥳",
+  "KD : Hey @{username}, welcome aboard! Let the music play and the conversations flow! 🎹✨",
+  "KD : Welcome @{username}! Step in, tune in, and let's make some memories together! 🎷🌈",
+  "KD : Woohoo! @{username} has entered the chat! Let the bass drop and the fun begin! 🎛️🚀",
+  "KD : Welcome @{username}! Grab a drink 🥤, request a song, and join the party! 🥳✨",
+  "KD : Look who's here! Welcome @{username}! Time to tune in to the good times! 📻🎉",
+  "KD : Hey @{username}! Your arrival just increased the vibe level by 100%! 📈🔥",
+  "KD : Welcome @{username}! Ready to rock, roll, and chat? Let's make this day awesome! 🎸💬",
+  "KD : Boom! 💥 @{username} is in the house! Turn up the volume and enjoy the session! 🎵🎧",
+  "KD : Welcome @{username}! A new friend has joined our musical family! Introduce yourself! 🥰🎶",
+  "KD : Hey there @{username}! The playlist just got a little brighter because of you! 🌟🎶",
+  "KD : Welcome @{username}! Let the melody guide your soul and the chat keep you smiling! 💫🎹",
+  "KD : Welcome @{username}! You are officially invited to vibe, chat, and relax with us! 🍹🎶",
+  "KD : Welcome @{username}! Turn the music UP, forget the worries, and chat away! 🔊💃",
+  "KD : Hey @{username}! The beat goes on, and we're so glad you're here to share it! 🥁❤️",
+  "KD : Warm welcome to @{username}! Tell us, what kind of music makes you wanna dance? 🕺🎶",
+  "KD : Ahoy @{username}! Welcome to our harbor of smooth tracks and great chats! 🚢🎵",
+  "KD : Hello @{username}! You've just stepped into the happiest music room on Groic! Enjoy! 🌈🎶",
+  "KD : Welcome @{username}! Ready to lose yourself in the music and find friends in the chat? 🗺️✨",
+  "KD : Hey @{username}! Life is better when we listen together. Welcome to the vibe tribe! 🎧🌾"
+];
+
 function loadAllowedAdmins() {
   if (allowedAdminsCache.length === 0) {
     const defaultAdmins = ["_darth_vader_", "dedsec_404", "_its_shru_"];
@@ -62,7 +90,7 @@ async function syncAllowedAdminsFromCloud(roomUid) {
           const fromCloud = res.data.map(u => u.toLowerCase().trim());
           saveAllowedAdmins(fromCloud);
           console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
-          
+
           // If we had old genres to clean, do a patch now
           if (details.roomGenre && details.roomGenre.length !== cleanGenres.length) {
             const payload = {
@@ -104,7 +132,7 @@ async function syncAllowedAdminsFromCloud(roomUid) {
     }
 
     console.log(`[Handlers] New JSON Blob ID created: ${newBlobId}`);
-    
+
     // Register the new blob ID in roomCountry and clear genres tags
     const payload = {
       roomOwner: details.roomOwner,
@@ -304,7 +332,10 @@ function processUserList(activeUsers, roomUid) {
     if (!knownUsers.has(userKey)) {
       knownUsers.add(userKey);
       if (initialized) {
-        sendChatMessage(`KD : Welcome ${cleanUsername}! Enjoy the music 🎶`, roomUid);
+        const randomIndex = Math.floor(Math.random() * WELCOME_MESSAGES.length);
+        const template = WELCOME_MESSAGES[randomIndex];
+        const message = template.replace("{username}", cleanUsername);
+        sendChatMessage(message, roomUid);
       }
     }
   }
@@ -567,11 +598,11 @@ function setupChatHandler(roomUid) {
           for (let i = 0; i < rooms.length; i++) {
             const currentRoom = rooms[i];
             const currentRoomUid = currentRoom.roomUid;
-            
+
             try {
               const details = await getRoomDetails(currentRoomUid);
               if (!details) continue;
-              
+
               const kickedList = details.kicked || [];
               if (kickedList.includes(targetUser)) {
                 continue;
@@ -614,11 +645,11 @@ function setupChatHandler(roomUid) {
           for (let i = 0; i < rooms.length; i++) {
             const currentRoom = rooms[i];
             const currentRoomUid = currentRoom.roomUid;
-            
+
             try {
               const details = await getRoomDetails(currentRoomUid);
               if (!details) continue;
-              
+
               const kickedList = details.kicked || [];
               if (!kickedList.includes(targetUser)) {
                 continue;
