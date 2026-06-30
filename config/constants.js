@@ -8,5 +8,12 @@ module.exports = {
   ROOM_DESC: "この部屋への南インド人の立ち入りは禁止されています。",
   ROOM_GENRE: ["Viraha", "Shab-e-Hijr"],
   MAX_PARTICIPANTS: 50,
-  ROOM_FILE: "room.json"
+  ROOM_FILE: "room.json",
+  // You can pass a string ID, or an object with custom properties.
+
+  GHOST_ROOMS: [
+    { uid: "", copyAvatarFrom: "" },
+    // Example 1: { uid: "room_id", copyAvatarFrom: "username" } -> Copies the avatar of a specific user already in the room
+    // Example 2: { uid: "room_id", imageUrl: "https://example.com/img.jpg" } -> Sets a custom direct image URL
+  ]
 };

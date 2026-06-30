@@ -2,7 +2,7 @@ const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
 const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
-const { updateRoomKickList, updateRoomAdminList, getRoomDetails, getActivePublicRooms } = require("./api");
+const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
@@ -10,7 +10,7 @@ const path = require("path");
 function encodeUUID(uuid) {
   const hex = uuid.replace(/-/g, "");
   if (hex.length !== 32) return "";
-  
+
   return hex.split("").map(char => {
     const num = parseInt(char, 16);
     return num.toString(2).padStart(4, "0")
@@ -24,11 +24,11 @@ function decodeUUID(encodedStr) {
   // Match any zero-width characters (including U+200C, U+200D, and U+200B)
   const match = encodedStr.match(/[\u200C\u200D\u200B]+/g);
   if (!match) return null;
-  
+
   // Combine all matches and strip out zero-width spaces (U+200B)
   const combined = match.join("").replace(/\u200B/g, "");
   if (combined.length < 128) return null;
-  
+
   // Slice the last 128 characters representing the most recent UUID
   const bits = combined.substring(combined.length - 128);
   let hex = "";
@@ -37,7 +37,7 @@ function decodeUUID(encodedStr) {
     const binary = chunk.replace(/\u200C/g, "0").replace(/\u200D/g, "1");
     hex += parseInt(binary, 2).toString(16);
   }
-  
+
   return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}`;
 }
 
@@ -297,7 +297,7 @@ function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: OWNER_USERNAME,
+      username: " ",
       name: " ",
       imageUrl: "",
       isBot: false
@@ -328,7 +328,7 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: OWNER_USERNAME,
+      username: " ",
       name: " ",
       imageUrl: "",
       isBot: false
@@ -357,7 +357,7 @@ function emitAdminControlForRoom(roomUid, enableAdminControl) {
   socket.on("connect", () => {
     socket.emit("joinRoom", {
       roomUid,
-      username: OWNER_USERNAME,
+      username: " ",
       name: " ",
       imageUrl: "",
       isBot: false
@@ -705,7 +705,6 @@ function setupChatHandler(roomUid) {
               }
 
               emitKickUserForRoom(currentRoomUid, targetUser, true);
-              updateRoomKickList(currentRoomUid, targetUser, true).catch(() => { });
               kickedCount++;
             } catch (err) {
               console.error(`Failed to kick ${targetUser} in room ${currentRoomUid}:`, err.message);
@@ -745,7 +744,6 @@ function setupChatHandler(roomUid) {
               }
 
               emitKickUserForRoom(currentRoomUid, targetUser, false);
-              updateRoomKickList(currentRoomUid, targetUser, false).catch(() => { });
               unkickedCount++;
             } catch (err) {
               console.error(`Failed to unkick ${targetUser} in room ${currentRoomUid}:`, err.message);
