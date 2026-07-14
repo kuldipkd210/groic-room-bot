@@ -4,9 +4,9 @@ module.exports = {
   BOT_USERNAME: " ",
   BOT_NAME: " ",
   BOT_IMAGE_URL: "https://i.ibb.co/wNVgfQRK/fgdsgf.jpg",
-  ROOM_NAME: "北方の狼",
-  ROOM_DESC: "この部屋への南インド人の立ち入りは禁止されています。",
-  ROOM_GENRE: ["Viraha", "Shab-e-Hijr"],
+  ROOM_NAME: "Wolf in the North",
+  ROOM_DESC: "The North Remembers.",
+  ROOM_GENRE: ["Classical", "Popular"],
   MAX_PARTICIPANTS: 50,
   ROOM_FILE: "room.json",
   // You can pass a string ID, or an object with custom properties.

@@ -1,6 +1,5 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
-const { translateToEnglish, translateArrayOfTexts } = require("./translate");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
@@ -595,69 +594,7 @@ function setupChatHandler(roomUid) {
         return;
       }
 
-      // ─── !eng command ───────────────────────────────────────────────
-      // Usage:
-      // 1. "!eng <your text>" -> Translates the typed text
-      // 2. "!eng <number>"    -> Translates the last N chat messages in the room (e.g. !eng 5)
-      // 3. "!eng" (alone)     -> Translates the last 1 chat message
-      const isEngCommand = message.toLowerCase().startsWith("!eng") || message.toLowerCase().startsWith("! eng");
-
-      if (isEngCommand) {
-        let arg = "";
-        if (message.toLowerCase().startsWith("!eng")) {
-          arg = message.slice("!eng".length).trim();
-        } else {
-          arg = message.slice("! eng".length).trim();
-        }
-
-        const isNumber = /^\d+$/.test(arg);
-
-        // A. If empty or a number -> Translate recent chat history
-        if (!arg || isNumber) {
-          let N = 1;
-          if (isNumber) {
-            N = parseInt(arg, 10);
-            if (N < 1) N = 1;
-            if (N > 10) N = 10; // Safe guard: limit to max 10 to avoid massive output or rate limits
-          }
-
-          if (chatHistory.length === 0) {
-            sendChatMessage(`KD : @${senderUsername} No recent messages to translate yet!`, roomUid);
-            return;
-          }
-
-          const selectedMessages = chatHistory.slice(-N);
-          sendChatMessage(`KD : ⏳ Translating last ${selectedMessages.length} message(s)...`, roomUid);
-
-          // Extract just the raw messages to translate in a batch
-          const rawTexts = selectedMessages.map(m => m.message);
-          const translatedList = await translateArrayOfTexts(rawTexts);
-
-          if (translatedList && Array.isArray(translatedList)) {
-            // Send each translation as a separate message with the format "KD : @username, translation"
-            for (let i = 0; i < selectedMessages.length; i++) {
-              const original = selectedMessages[i];
-              const translation = translatedList[i];
-              if (translation) {
-                sendChatMessage(`KD : @${original.username}, ${translation}`, roomUid);
-              }
-            }
-          } else {
-            sendChatMessage(`KD : Translation Unavailable`, roomUid);
-          }
-          return;
-        }
-
-        // B. If it has plain text -> Translate the typed text directly
-        sendChatMessage(`KD : Translating...`, roomUid);
-        const translated = await translateToEnglish(arg);
-
-        if (translated) {
-          sendChatMessage(`KD : ${translated}`, roomUid);
-        } else {
-          sendChatMessage(`KD : Translation Unavailable`, roomUid);
-        }
-      } else if (message.toLowerCase().startsWith("!ask") || message.toLowerCase().startsWith("! ask")) {
+      if (message.toLowerCase().startsWith("!ask") || message.toLowerCase().startsWith("! ask")) {
         let arg = "";
         if (message.toLowerCase().startsWith("!ask")) {
           arg = message.slice("!ask".length).trim();
