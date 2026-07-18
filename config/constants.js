@@ -1,8 +1,8 @@
 module.exports = {
   USER_ID: "ZD8n4XeV1Ad3R9EgyRa5ASa8S8s1",
   OWNER_USERNAME: "kd_zoro",
-  BOT_USERNAME: " ",
-  BOT_NAME: " ",
+  BOT_USERNAME: "10__01",
+  BOT_NAME: "xxx",
   BOT_IMAGE_URL: "https://i.ibb.co/wNVgfQRK/fgdsgf.jpg",
   ROOM_NAME: "Wolf in the North",
   ROOM_DESC: "The North Remembers.",

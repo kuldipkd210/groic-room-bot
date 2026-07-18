@@ -1,10 +1,15 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
-const { BOT_USERNAME, BOT_NAME, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
+const { BOT_USERNAME, BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
+
+const BOT_USERNAME_NORMALIZED = (BOT_USERNAME && BOT_USERNAME.trim()) 
+  ? BOT_USERNAME.trim().toLowerCase() 
+  : OWNER_USERNAME.trim().toLowerCase();
+
 
 function encodeUUID(uuid) {
   const hex = uuid.replace(/-/g, "");
@@ -278,6 +283,7 @@ async function saveAllowedAdminsAndSync(list, roomUid) {
 let keepAliveInterval = null;
 let knownUsers = new Set();
 let initialized = false; // true after first presenceUpdate processed
+let botJoinedOnce = false; // true after bot is found in active users at least once
 let chatHistory = []; // Stores rolling { username, message } recent messages
 let currentAdmins = [];
 const userStatuses = {};
@@ -376,14 +382,45 @@ function emitAdminControlForRoom(roomUid, enableAdminControl) {
 }
 
 function sendChatMessage(message, roomUid) {
-  emit("sendChat", { message, roomUid });
+  const formatted = message.replace(/^KD\s*:\s*/i, "");
+  emit("sendChat", { message: formatted, roomUid });
 }
 
 function isBotUser(user) {
-  const username = (user.username || "").trim();
-  const name = (user.name || "").trim();
-  return username === "" ||
-    (username === BOT_USERNAME.trim() && name === BOT_NAME.trim());
+  const username = (user.username || "").trim().toLowerCase();
+  const name = (user.name || "").trim().toLowerCase();
+  const imageUrl = user.imageUrl || "";
+
+  // Fallback for empty username (old behavior)
+  if (username === "") return true;
+
+  const botUsernameConfig = (BOT_USERNAME || "").trim().toLowerCase();
+  const ownerUsernameConfig = (OWNER_USERNAME || "").trim().toLowerCase();
+
+  // If configured bot username matches the user
+  if (botUsernameConfig && username === botUsernameConfig) return true;
+
+  // If username matches the owner (since bot runs under owner's account)
+  if (username === ownerUsernameConfig) {
+    // If the bot is configured to run under a separate account, the owner is NOT the bot
+    if (botUsernameConfig && botUsernameConfig !== ownerUsernameConfig) {
+      return false;
+    }
+    // Distinguish bot by image URL or name prefix
+    if (BOT_IMAGE_URL && imageUrl === BOT_IMAGE_URL) {
+      return true;
+    }
+    const botNameConfig = (BOT_NAME || "").trim().toLowerCase();
+    if (botNameConfig && name === botNameConfig) {
+      return true;
+    }
+    // Fallback if no custom BOT_IMAGE_URL config is provided
+    if (!BOT_IMAGE_URL) {
+      return true;
+    }
+  }
+
+  return false;
 }
 
 // ─── Socket-event-based user detection (no HTTP polling) ───────────────────
@@ -449,9 +486,13 @@ function processUserList(activeUsers, roomUid) {
     }
   }
 
-  // Self-healing: If the bot has been initialized but is no longer found in the active users list,
-  // it has been disconnected or removed (e.g. due to an old Render instance shutting down). Re-join!
-  if (initialized && !selfFound) {
+  if (selfFound) {
+    botJoinedOnce = true;
+  }
+
+  // Self-healing: If the bot has been successfully joined once but is no longer found in the active users list,
+  // it has been disconnected or removed. Re-join!
+  if (botJoinedOnce && !selfFound) {
     console.log("[Handlers] Bot is not in active users list. Attempting to rejoin room...");
     const socket = getSocket();
     if (socket && socket.connected) {
@@ -459,7 +500,7 @@ function processUserList(activeUsers, roomUid) {
         roomUid: roomUid,
         username: BOT_USERNAME,
         name: BOT_NAME,
-        imageUrl: "",
+        imageUrl: BOT_IMAGE_URL,
         isBot: true
       });
     }
@@ -501,6 +542,7 @@ function stopHandlers() {
 
   knownUsers.clear();
   initialized = false;
+  botJoinedOnce = false;
 
   for (const key of Object.keys(userStatuses)) {
     delete userStatuses[key];
@@ -904,7 +946,11 @@ function setupChatHandler(roomUid) {
         }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
-        const isBotResponse = message.startsWith("KD :") || senderUsername === " " || senderUsername === BOT_USERNAME;
+        const isBotResponse = message.startsWith("KD :") || 
+                              message.startsWith("KD:") || 
+                              senderUsername === " " || 
+                              senderUsername === BOT_USERNAME || 
+                              senderUsername.toLowerCase().trim() === BOT_USERNAME_NORMALIZED;
         const isCommand = message.startsWith("!");
 
         if (!isBotResponse && !isCommand) {
