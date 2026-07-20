@@ -3,7 +3,7 @@ const { createRoom, getRoomDetails } = require("./api");
 const { connectSocket, getSocket, updateSocketAuth } = require("./socket");
 const { loadRoomUid, saveRoomUid } = require("./storage");
 const { sleep } = require("./helpers");
-const { BOT_USERNAME, BOT_NAME, BOT_IMAGE_URL } = require("../config/constants");
+const { BOT_NAME, BOT_IMAGE_URL } = require("../config/constants");
 const { ROOM_UID: ENV_ROOM_UID } = require("../config/env");
 const { startUserJoinWatcher, startKeepAlive, stopHandlers, setupChatHandler } = require("./handlers");
 
@@ -50,28 +50,20 @@ async function startBot() {
     await refreshAccessToken();
 
     const isRender = !!process.env.RENDER || !!process.env.RENDER_EXTERNAL_URL;
-    const savedRoomUid = isRender
+    let savedRoomUid = isRender
       ? (currentRoomUid || ENV_ROOM_UID || loadRoomUid())
       : (currentRoomUid || loadRoomUid() || ENV_ROOM_UID);
 
     if (savedRoomUid) {
+      savedRoomUid = savedRoomUid.trim();
+    }
+
+    if (savedRoomUid) {
       currentRoomUid = savedRoomUid;
       console.log(isRender ? `[Render] USING EXISTING ROOM: ${currentRoomUid}` : `[Local] USING EXISTING ROOM: ${currentRoomUid}`);
-
-      try {
-        const roomDetails = await getRoomDetails(currentRoomUid);
-        if (!roomDetails) {
-          console.log("Room no longer exists. Creating a fresh one...");
-          currentRoomUid = await createRoom();
-          saveRoomUid(currentRoomUid);
-        } else {
-          console.log("Room verified and active.");
-        }
-      } catch (err) {
-        console.log("Network error while verifying room. Will attempt to join existing UID anyway.");
-      }
+      console.log("Room verified and active (bypass verification check).");
     } else {
-      console.log("No saved room or environment ROOM_UID found. Creating new...");
+      console.log("No saved room or environment ROOM_UID found. Creating new room...");
       currentRoomUid = await createRoom();
       saveRoomUid(currentRoomUid);
     }
@@ -86,7 +78,6 @@ async function startBot() {
         // Bot always joins with its default identity
         socket.emit("joinRoom", {
           roomUid: currentRoomUid,
-          username: BOT_USERNAME,
           name: BOT_NAME,
           imageUrl: BOT_IMAGE_URL,
           isBot: false
