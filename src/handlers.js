@@ -409,12 +409,25 @@ function sendChatMessage(message, roomUid) {
   emit("sendChat", { message: formatted, roomUid });
 }
 
+function isBotUsername(username) {
+  if (!username) return true;
+  const clean = username.trim().toLowerCase();
+  if (clean === "" || clean === "xaix" || clean === "xai") return true;
+  const botNameConfig = (BOT_NAME || "").trim().toLowerCase();
+  if (botNameConfig && clean === botNameConfig) return true;
+  return false;
+}
+
 function isBotUser(user) {
   const username = (user.username || "").trim().toLowerCase();
   const name = (user.name || "").trim().toLowerCase();
   const imageUrl = user.imageUrl || "";
 
   if (username === "") return true;
+
+  if (isBotUsername(username) || isBotUsername(name)) {
+    return true;
+  }
 
   const ownerUsernameConfig = (OWNER_USERNAME || "").trim().toLowerCase();
 
@@ -454,6 +467,9 @@ function processUserList(activeUsers, roomUid) {
     }
 
     const cleanUsername = username.trim() || "user";
+    if (isBotUsername(cleanUsername)) {
+      continue;
+    }
     activeUsernames.add(cleanUsername);
 
     // Initialize default status to AVL if not already set
@@ -582,21 +598,27 @@ function setupChatHandler(roomUid) {
 
       // ─── User Status Commands ───────────────────────────────────────
       if (lowerMsg === "!afk") {
-        userStatuses[senderUsername] = "AFK";
-        sendChatMessage(`KD: @${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
+        if (!isBotUsername(senderUsername)) {
+          userStatuses[senderUsername] = "AFK";
+          sendChatMessage(`KD: @${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
+        }
         return;
       } else if (lowerMsg === "!slp") {
-        userStatuses[senderUsername] = "SLP";
-        sendChatMessage(`KD: @${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
+        if (!isBotUsername(senderUsername)) {
+          userStatuses[senderUsername] = "SLP";
+          sendChatMessage(`KD: @${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
+        }
         return;
       } else if (lowerMsg === "!avl") {
-        userStatuses[senderUsername] = "AVL";
-        sendChatMessage(`KD: @${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
+        if (!isBotUsername(senderUsername)) {
+          userStatuses[senderUsername] = "AVL";
+          sendChatMessage(`KD: @${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
+        }
         return;
       } else if (lowerMsg.startsWith("!status")) {
         const parts = message.trim().split(/\s+/);
         if (parts.length === 1) {
-          const users = Object.keys(userStatuses);
+          const users = Object.keys(userStatuses).filter(u => !isBotUsername(u));
           if (users.length === 0) {
             sendChatMessage(`KD: No active users in the room.`, roomUid);
           } else {
@@ -616,7 +638,11 @@ function setupChatHandler(roomUid) {
             target = target.substring(1);
           }
           const targetLower = target.toLowerCase();
-          const keys = Object.keys(userStatuses);
+          if (isBotUsername(targetLower)) {
+            sendChatMessage(`KD: @${target} is the AI bot.`, roomUid);
+            return;
+          }
+          const keys = Object.keys(userStatuses).filter(u => !isBotUsername(u));
           let matchedUser = keys.find(
             (u) => u.toLowerCase() === targetLower
           );
@@ -653,14 +679,13 @@ function setupChatHandler(roomUid) {
       }
 
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!pick dj") {
-        const usersArray = Object.keys(userStatuses);
+        const usersArray = Object.keys(userStatuses).filter(u => !isBotUsername(u));
         const candidates = usersArray.filter(u => u.toLowerCase() !== senderUsername.toLowerCase());
-        const targetList = candidates.length > 0 ? candidates : usersArray;
 
-        if (targetList.length === 0) {
+        if (candidates.length === 0) {
           sendChatMessage(`🎵 @${senderUsername} you're the DJ! Pick the next song! 🎧`, roomUid);
         } else {
-          const picked = targetList[Math.floor(Math.random() * targetList.length)];
+          const picked = candidates[Math.floor(Math.random() * candidates.length)];
           sendChatMessage(`🎵 @${picked} is chosen to play the next song! 🎧 Pick a track! 🎶`, roomUid);
         }
         return;
