@@ -650,11 +650,11 @@ function setupChatHandler(roomUid) {
           sendChatMessage(`KD : @${senderUsername} Please provide a question or prompt after !ask.`, roomUid);
         } else {
           sendChatMessage(`KD : ⏳ Thinking...`, roomUid);
-          const answer = await askAi(arg);
+          const answer = await askAi(arg, roomUid, senderUsername);
           if (answer) {
-            sendChatMessage(`KD : ${answer}`, roomUid);
+            sendChatMessage(`KD : @${senderUsername} ${answer}`, roomUid);
           } else {
-            sendChatMessage(`KD : I couldn't get an answer right now.`, roomUid);
+            sendChatMessage(`KD : @${senderUsername} I couldn't get an answer right now.`, roomUid);
           }
         }
       } else if (message.toLowerCase().startsWith("!kick_all rooms ")) {
