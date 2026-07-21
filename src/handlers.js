@@ -638,23 +638,48 @@ function setupChatHandler(roomUid) {
         return;
       }
 
-      if (message.toLowerCase().startsWith("!ask") || message.toLowerCase().startsWith("! ask")) {
-        let arg = "";
-        if (message.toLowerCase().startsWith("!ask")) {
-          arg = message.slice("!ask".length).trim();
+      if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!help") {
+        const helpMessage = [
+          "Available public Commands:",
+          "",
+          "1. !afk / !slp / !avl — Set your status to AFK 📵, SLP 💤, or AVL 🙋.",
+          "2. !status — View active user statuses in the room.",
+          "3. !pick dj — Randomly pick an active member to play the next song.",
+          "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
+          "5. !ask <prompt> — Professional & informative AI answer."
+        ].join("\n");
+        sendChatMessage(helpMessage, roomUid);
+        return;
+      }
+
+      if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!pick dj") {
+        const usersArray = Object.keys(userStatuses);
+        const candidates = usersArray.filter(u => u.toLowerCase() !== senderUsername.toLowerCase());
+        const targetList = candidates.length > 0 ? candidates : usersArray;
+
+        if (targetList.length === 0) {
+          sendChatMessage(`🎵 @${senderUsername} you're the DJ! Pick the next song! 🎧`, roomUid);
         } else {
-          arg = message.slice("! ask".length).trim();
+          const picked = targetList[Math.floor(Math.random() * targetList.length)];
+          sendChatMessage(`🎵 @${picked} is chosen to play the next song! 🎧 Pick a track! 🎶`, roomUid);
         }
+        return;
+      }
+
+      if (message.toLowerCase().startsWith("!ask") || message.toLowerCase().startsWith("! ask") || message.toLowerCase().startsWith("!xai") || message.toLowerCase().startsWith("! xai")) {
+        const isXai = message.toLowerCase().startsWith("!xai") || message.toLowerCase().startsWith("! xai");
+        const cmdName = isXai ? (message.toLowerCase().startsWith("!xai") ? "!xai" : "! xai") : (message.toLowerCase().startsWith("!ask") ? "!ask" : "! ask");
+        const arg = message.slice(cmdName.length).trim();
 
         if (!arg) {
-          sendChatMessage(`KD : @${senderUsername} Please provide a question or prompt after !ask.`, roomUid);
+          sendChatMessage(`Please provide a question or prompt after ${cmdName.trim()}.`, roomUid);
         } else {
-          sendChatMessage(`KD : ⏳ Thinking...`, roomUid);
-          const answer = await askAi(arg, roomUid, senderUsername);
+          sendChatMessage(`⏳ Thinking...`, roomUid);
+          const answer = await askAi(arg, isXai ? "xai" : "ask", roomUid, senderUsername);
           if (answer) {
-            sendChatMessage(`KD : @${senderUsername} ${answer}`, roomUid);
+            sendChatMessage(answer, roomUid);
           } else {
-            sendChatMessage(`KD : @${senderUsername} I couldn't get an answer right now.`, roomUid);
+            sendChatMessage(`I couldn't get an answer right now.`, roomUid);
           }
         }
       } else if (message.toLowerCase().startsWith("!kick_all rooms ")) {
@@ -962,10 +987,10 @@ function setupChatHandler(roomUid) {
         }
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
-        const isBotResponse = message.startsWith("KD :") || 
-                              message.startsWith("KD:") || 
-                              senderUsername === " " || 
-                              senderUsername.toLowerCase().trim() === OWNER_USERNAME.toLowerCase().trim();
+        const isBotResponse = message.startsWith("KD :") ||
+          message.startsWith("KD:") ||
+          senderUsername === " " ||
+          senderUsername.toLowerCase().trim() === OWNER_USERNAME.toLowerCase().trim();
         const isCommand = message.startsWith("!");
 
         if (!isBotResponse && !isCommand) {

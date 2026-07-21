@@ -39,7 +39,7 @@ function connectSocket(url, onConnect, onDisconnect, onError) {
   const agent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
   socket = io(url, {
-    transports: ["websocket"], // match web app strictly
+    transports: ["websocket", "polling"],
     auth: {
       Authorization: getToken()
     },
@@ -55,7 +55,9 @@ function connectSocket(url, onConnect, onDisconnect, onError) {
     reconnection: true,
     reconnectionAttempts: Infinity,
     reconnectionDelay: 3000,
-    timeout: 30000
+    timeout: 30000,
+    pingTimeout: 60000,
+    pingInterval: 25000
   });
 
   if (proxyUrl) console.log("Socket using proxy:", proxyUrl.replace(/:([^@]+)@/, ":***@"));

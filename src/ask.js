@@ -8,11 +8,6 @@ const GROQ_URL = "https://api.groq.com/openai/v1/chat/completions";
 const proxyUrl = process.env.HTTPS_PROXY || process.env.HTTP_PROXY || null;
 const httpsAgent = proxyUrl ? new HttpsProxyAgent(proxyUrl) : undefined;
 
-// Room conversation memory: Map<roomUid, Array<{ role: 'user'|'assistant', content: string }>>
-// Stores up to 10 messages (5 Q&A turns) per room to keep memory lightweight.
-const roomMemory = new Map();
-const MAX_MEMORY_MESSAGES = 10;
-
 // Helper to sleep/wait
 const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
 
@@ -55,7 +50,8 @@ function needsWebSearch(query) {
   const q = query.toLowerCase();
   const keywords = [
     "news", "today", "latest", "current", "recent", "price", "score",
-    "weather", "date", "who is", "what is happening", "2024", "2025", "2026", "stock", "update"
+    "weather", "date", "who is", "what is happening", "2024", "2025", "2026", "stock", "update",
+    "mcp", "model context protocol"
   ];
   return keywords.some((kw) => q.includes(kw));
 }
@@ -88,7 +84,7 @@ async function searchWeb(query) {
 }
 
 /**
- * Cleans text from raw markdown stars or formatting symbols.
+ * Cleans text from raw markdown stars or formatting symbols while preserving line breaks.
  */
 function cleanText(text) {
   if (!text) return "";
@@ -96,27 +92,25 @@ function cleanText(text) {
     .replace(/\*\*/g, "")
     .replace(/\*/g, "")
     .replace(/`/g, "")
-    .replace(/#/g, "")
-    .replace(/\n+/g, " ")
+    .replace(/#+\s?/g, "")
+    .replace(/\n{3,}/g, "\n\n")
     .trim();
 }
 
 /**
- * Sends prompt to Groq AI with room memory, tone detection, and smart web search.
+ * Sends prompt to Groq AI.
  *
  * @param {string} question - The user's prompt
- * @param {string} [roomUid] - Room identifier for context memory
+ * @param {string} [mode="ask"] - Mode: "ask" for professional/informative, "xai" for funny/sarcastic Xaix personality
+ * @param {string} [roomUid] - Room identifier
  * @param {string} [senderUsername] - Username of the sender
  * @returns {Promise<string|null>}
  */
-async function askAi(question, roomUid = "default", senderUsername = "") {
+async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "") {
   if (!GROQ_API_KEY) {
     console.log("[Ask] GROQ_API_KEY is not set");
     return null;
   }
-
-  // Get existing room history
-  const history = roomMemory.get(roomUid) || [];
 
   // Check if web search is needed for real-time information
   let webContext = "";
@@ -127,21 +121,58 @@ async function askAi(question, roomUid = "default", senderUsername = "") {
     }
   }
 
-  const systemPrompt = [
-    "You are KD, an intelligent, quick-witted, and accurate AI assistant in a live group chat.",
-    "Understand group chat dynamics: recognize sarcasm, jokes, or funny prompts and respond with matching humor and clever wit, while remaining accurate.",
-    "Keep answers extremely concise: STRICT MAXIMUM OF 200 CHARACTERS TOTAL.",
-    "Do NOT use markdown symbols like **, *, `, or # as responses are rendered in plain text.",
-    "Be direct, accurate, and engaging."
-  ].join(" ");
+  const now = new Date();
+  const todayFormatted = now.toLocaleDateString("en-US", {
+    weekday: "long",
+    year: "numeric",
+    month: "long",
+    day: "numeric"
+  });
 
-  const userContent = senderUsername
-    ? `@${senderUsername} asked: ${question}${webContext}`
-    : `${question}${webContext}`;
+  let systemPrompt = "";
+
+  if (mode === "xai") {
+    // !xai Mode: Witty, funny, sarcastic English companion (NO Hindi / NO slang)
+    systemPrompt = [
+      "You are xaix, an AI assistant designed for live group chats.",
+      "Your personality is witty, playful, quick-thinking, and lightly sarcastic, while remaining helpful and factually accurate.",
+      `Today's current date is ${todayFormatted}.`,
+      "",
+      "Guidelines:",
+      "• Prefer responding in natural English. Avoid switching languages unless the user does so first.",
+      "• Keep the humor clever, conversational, and good-natured rather than offensive or mean-spirited.",
+      "• Match the tone and energy of the conversation while staying engaging and useful.",
+      "• Keep responses concise by default, but don't sacrifice clarity or context when more detail is genuinely helpful.",
+      "• Write naturally as if you're participating in the chat, not delivering a formal essay.",
+      "• When asked to roast someone or execute a command, jump STRAIGHT into the response directly. Do NOT use intro filler like 'Alright, let's roast X', 'You want me to roast X?', or repeating the prompt.",
+      "• When asked to roast a person, roast them naturally like a real member of the chat! Focus on relatable human quirks, habits, and funny banter rather than constantly spinning or over-analyzing their literal username.",
+      "• When asked for song suggestions, recommendations, movies, tips, or any list of items, ALWAYS format the response as a clean, clear numbered list (1., 2., 3.) with a newline for each item.",
+      "• When asked 'who are you' or about your identity, keep it friendly and simple: introduce yourself as their buddy here to assist them with their chats.",
+      "• Return plain text suitable for a chat application, avoiding Markdown formatting unless the user specifically requests it."
+    ].join("\n");
+  } else {
+    // !ask Mode: Informative, professional, clean, clear, direct
+    systemPrompt = [
+      "You are a professional, knowledgeable, and reliable AI assistant.",
+      `Today's current date is ${todayFormatted}.`,
+      "",
+      "Guidelines:",
+      "• Provide accurate, well-reasoned, and easy-to-understand answers.",
+      "• Prefer clear, standard English with a professional yet approachable tone.",
+      "• Jump straight into the answer without intro filler or repeating the user's prompt.",
+      "• When asked for song suggestions, recommendations, steps, or any list of items, ALWAYS format the output as a clean numbered list (1., 2., 3.) with line breaks (newlines).",
+      "• When asked 'who are you' or about your identity, state simply and warmly that you are their AI buddy here to assist them with their chats.",
+      "• Keep responses concise by default, adding more detail only when it improves the answer or the user requests it.",
+      "• Organize information into short paragraphs or simple numbered lists when appropriate.",
+      "• Prioritize readability on mobile devices with sensible line breaks.",
+      "• Return plain text unless the user explicitly asks for Markdown or another specific format."
+    ].join("\n");
+  }
+
+  const userContent = `${question}${webContext}`;
 
   const messages = [
     { role: "system", content: systemPrompt },
-    ...history,
     { role: "user", content: userContent }
   ];
 
@@ -149,27 +180,14 @@ async function askAi(question, roomUid = "default", senderUsername = "") {
     const res = await callGroq({
       model: GROQ_MODEL || "llama-3.3-70b-versatile",
       messages,
-      temperature: 0.75,
-      max_tokens: 150
+      temperature: mode === "xai" ? 0.75 : 0.4,
+      max_tokens: 250
     });
 
     let answer = res?.data?.choices?.[0]?.message?.content?.trim();
     if (!answer) return null;
 
     answer = cleanText(answer);
-
-    // Enforce strict 200 character limit
-    if (answer.length > 200) {
-      answer = answer.slice(0, 197) + "...";
-    }
-
-    // Save to room memory (up to 10 messages / 5 turns max)
-    history.push({ role: "user", content: userContent });
-    history.push({ role: "assistant", content: answer });
-    while (history.length > MAX_MEMORY_MESSAGES) {
-      history.shift();
-    }
-    roomMemory.set(roomUid, history);
 
     return answer;
   } catch (err) {
@@ -181,4 +199,3 @@ async function askAi(question, roomUid = "default", senderUsername = "") {
 module.exports = {
   askAi
 };
-

@@ -96,7 +96,11 @@ async function startBot() {
       },
       (reason) => {
         console.log("Socket disconnected:", reason);
-        botStarted = false; // Allow runForever to detect failure
+        if (reason === "io server disconnect" || reason === "io client disconnect") {
+          botStarted = false; // Allow runForever to handle full restart
+        } else {
+          console.log("Socket.io is auto-reconnecting after:", reason);
+        }
       },
       async (err) => {
         console.log("Socket error:", err.message);
