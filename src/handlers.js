@@ -1,6 +1,7 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
 const { askAi } = require("./ask");
+const { getLyricsAndTranslation } = require("./lyrics");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
@@ -409,6 +410,58 @@ function sendChatMessage(message, roomUid) {
   emit("sendChat", { message: formatted, roomUid });
 }
 
+function splitMessage(text, maxLength = 900) {
+  if (!text || text.length <= maxLength) return [text];
+  const paragraphs = text.split("\n\n");
+  const chunks = [];
+  let currentChunk = "";
+
+  for (const para of paragraphs) {
+    if ((currentChunk ? currentChunk + "\n\n" + para : para).length <= maxLength) {
+      currentChunk = currentChunk ? currentChunk + "\n\n" + para : para;
+    } else {
+      if (currentChunk) chunks.push(currentChunk);
+      if (para.length > maxLength) {
+        const lines = para.split("\n");
+        currentChunk = "";
+        for (const line of lines) {
+          if ((currentChunk ? currentChunk + "\n" + line : line).length <= maxLength) {
+            currentChunk = currentChunk ? currentChunk + "\n" + line : line;
+          } else {
+            if (currentChunk) chunks.push(currentChunk);
+            currentChunk = line;
+          }
+        }
+      } else {
+        currentChunk = para;
+      }
+    }
+  }
+  if (currentChunk) chunks.push(currentChunk);
+  return chunks;
+}
+
+function parseSongTitle(title, artist) {
+  if (!title) return "";
+  let clean = title
+    .replace(/\(\s*official.*?\)/gi, "")
+    .replace(/\[\s*official.*?\]/gi, "")
+    .replace(/\(\s*full.*?\)/gi, "")
+    .replace(/\[\s*full.*?\]/gi, "")
+    .replace(/\(\s*hd.*?\)/gi, "")
+    .replace(/\[\s*hd.*?\]/gi, "")
+    .replace(/#\w+/g, "");
+
+  let parts = clean.split("|").map(p => p.trim()).filter(Boolean);
+  let filtered = parts.filter(p => !/official|video|hd|full|records|t-series|speed|music|label|lyric|audio|4k|202\d|latest\s+punjabi\s+songs/i.test(p));
+  if (filtered.length === 0) filtered = [parts[0] || clean];
+  let result = filtered.slice(0, 2).join(" ");
+  if (artist && !/records|series|speed|music|channel|being\s+punjabi/i.test(artist) && !result.toLowerCase().includes(artist.toLowerCase())) {
+    result += " " + artist;
+  }
+  return result.trim();
+}
+
 function isBotUsername(username) {
   if (!username) return true;
   const clean = username.trim().toLowerCase();
@@ -672,9 +725,63 @@ function setupChatHandler(roomUid) {
           "2. !status — View active user statuses in the room.",
           "3. !pick dj — Randomly pick an active member to play the next song.",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
-          "5. !ask <prompt> — Professional & informative AI answer."
+          "5. !ask <prompt> — Professional & informative AI answer.",
+          "6. !lyrics — Get lyrics & English translation for playing room song 🎵."
         ].join("\n");
         sendChatMessage(helpMessage, roomUid);
+        return;
+      }
+
+      if (lowerMsg.startsWith("!lyrics") || lowerMsg.startsWith("! lyrics")) {
+        const cmdName = lowerMsg.startsWith("!lyrics") ? "!lyrics" : "! lyrics";
+        let songQuery = message.slice(cmdName.length).trim();
+
+        if (!songQuery) {
+          try {
+            const details = await getRoomDetails(roomUid);
+            const musicData = details?.musicStreaming || details?.roomDetails;
+            let songTitle = musicData?.title || details?.title || "";
+            let songArtist = musicData?.artist || details?.artist || "";
+
+            if (!songTitle && Array.isArray(musicData?.playlist)) {
+              const activeItem = musicData.playlist.find(p => p.isPlaying);
+              if (activeItem) {
+                songTitle = activeItem.title || "";
+                songArtist = activeItem.artist || "";
+              }
+            }
+
+            if (songTitle) {
+              songQuery = parseSongTitle(songTitle, songArtist);
+              console.log(`[Lyrics] Auto-detected playing song in room ${roomUid}: "${songQuery}" (raw title: "${songTitle}")`);
+            }
+          } catch (err) {
+            console.error("[Lyrics] Auto-detect error:", err.message);
+          }
+        }
+
+        if (!songQuery) {
+          sendChatMessage("KD: No song is currently playing in the room! Usage: !lyrics <song name>", roomUid);
+          return;
+        }
+
+        sendChatMessage(`KD: 🔍 Fetching lyrics & translation for "${songQuery}"...`, roomUid);
+        const result = await getLyricsAndTranslation(songQuery);
+        if (result) {
+          const chunks = splitMessage(result, 900);
+          for (let i = 0; i < chunks.length; i++) {
+            if (i === 0) {
+              sendChatMessage(`KD: 🎵 Lyrics & Translation for "${songQuery}":\n\n${chunks[i]}`, roomUid);
+            } else {
+              sendChatMessage(chunks[i], roomUid);
+            }
+            if (chunks.length > 1 && i < chunks.length - 1) {
+              await new Promise(r => setTimeout(r, 400));
+            }
+          }
+        } else {
+          sendChatMessage(`KD: Could not find lyrics for "${songQuery}".`, roomUid);
+        }
         return;
       }
 

@@ -106,7 +106,7 @@ function cleanText(text) {
  * @param {string} [senderUsername] - Username of the sender
  * @returns {Promise<string|null>}
  */
-async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "") {
+async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "", maxTokens = 250) {
   if (!GROQ_API_KEY) {
     console.log("[Ask] GROQ_API_KEY is not set");
     return null;
@@ -181,7 +181,7 @@ async function askAi(question, mode = "ask", roomUid = "default", senderUsername
       model: GROQ_MODEL || "llama-3.3-70b-versatile",
       messages,
       temperature: mode === "xai" ? 0.75 : 0.4,
-      max_tokens: 250
+      max_tokens: maxTokens
     });
 
     let answer = res?.data?.choices?.[0]?.message?.content?.trim();
