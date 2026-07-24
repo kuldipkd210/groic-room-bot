@@ -2,7 +2,7 @@ const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getLyricsAndTranslation } = require("./lyrics");
-const { getRoomDetails, getActivePublicRooms } = require("./api");
+const { getRoomDetails, getActivePublicRooms, updateRoomAdminControl } = require("./api");
 const { getToken } = require("./auth");
 const fs = require("fs");
 const path = require("path");
@@ -372,13 +372,15 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
 }
 
 function emitAdminControlForRoom(roomUid, enableAdminControl) {
-  if (roomUid === activeRoomUid) {
-    const mainSocket = getSocket();
-    if (mainSocket && mainSocket.connected) {
-      mainSocket.emit("adminControl", enableAdminControl);
-      return;
-    }
+  const mainSocket = getSocket();
+  if (mainSocket && mainSocket.connected) {
+    mainSocket.emit("adminControl", enableAdminControl);
+    mainSocket.emit("adminControl", { roomUid, enableAdminControl, adminControl: enableAdminControl });
+    mainSocket.emit("adminControl", { adminControl: enableAdminControl });
+    mainSocket.emit("roomUpdate", { roomUid, adminControl: enableAdminControl });
   }
+
+  updateRoomAdminControl(roomUid, enableAdminControl).catch(() => {});
 
   const token = getToken();
   const socket = createSocketInstance("https://socket-v2.groic.in", token);
@@ -395,6 +397,9 @@ function emitAdminControlForRoom(roomUid, enableAdminControl) {
 
   socket.on("presenceUpdate", () => {
     socket.emit("adminControl", enableAdminControl);
+    socket.emit("adminControl", { roomUid, enableAdminControl, adminControl: enableAdminControl });
+    socket.emit("adminControl", { adminControl: enableAdminControl });
+    socket.emit("roomUpdate", { roomUid, adminControl: enableAdminControl });
     setTimeout(() => {
       socket.disconnect();
     }, 1000);
@@ -1085,38 +1090,34 @@ function setupChatHandler(roomUid) {
           const listStr = list.map(u => `@${u}`).join(", ");
           sendChatMessage(`KD: Allowed users: ${listStr}`, roomUid);
         }
-      } else if (lowerMsg === "!enable admin" || lowerMsg.startsWith("!enable admin ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
-          return;
-        }
+      } else if (
+        lowerMsg === "!enable admin" || lowerMsg.startsWith("!enable admin ") ||
+        lowerMsg === "!enable_admin" || lowerMsg.startsWith("!enable_admin ") ||
+        lowerMsg === "!enableadmin" || lowerMsg.startsWith("!enableadmin ") ||
+        lowerMsg === "!admin enable" || lowerMsg.startsWith("!admin enable ")
+      ) {
+        if (!isAllowedAdminUser(senderUsername)) return;
         let targetRoomUid = roomUid;
-        const parts = message.split(/\s+/);
+        const parts = message.trim().split(/\s+/);
         if (parts.length > 2) {
           targetRoomUid = parts.slice(2).join(" ").trim();
         }
 
-        if (targetRoomUid === roomUid) {
-          emitAdminControlForRoom(roomUid, true);
-        } else {
-          emitAdminControlForRoom(targetRoomUid, true);
-        }
-      } else if (lowerMsg === "!disable admin" || lowerMsg.startsWith("!disable admin ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
-          return;
-        }
+        emitAdminControlForRoom(targetRoomUid, true);
+      } else if (
+        lowerMsg === "!disable admin" || lowerMsg.startsWith("!disable admin ") ||
+        lowerMsg === "!disable_admin" || lowerMsg.startsWith("!disable_admin ") ||
+        lowerMsg === "!disableadmin" || lowerMsg.startsWith("!disableadmin ") ||
+        lowerMsg === "!admin disable" || lowerMsg.startsWith("!admin disable ")
+      ) {
+        if (!isAllowedAdminUser(senderUsername)) return;
         let targetRoomUid = roomUid;
-        const parts = message.split(/\s+/);
+        const parts = message.trim().split(/\s+/);
         if (parts.length > 2) {
           targetRoomUid = parts.slice(2).join(" ").trim();
         }
 
-        if (targetRoomUid === roomUid) {
-          emitAdminControlForRoom(roomUid, false);
-        } else {
-          emitAdminControlForRoom(targetRoomUid, false);
-        }
+        emitAdminControlForRoom(targetRoomUid, false);
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
         const isBotResponse = message.startsWith("KD :") ||

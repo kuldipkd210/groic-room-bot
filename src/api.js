@@ -114,10 +114,47 @@ async function getActivePublicRooms() {
   }
 }
 
+async function updateRoomAdminControl(roomUid, enableAdminControl) {
+  try {
+    const details = await getRoomDetails(roomUid);
+    if (!details) return null;
+
+    const payload = {
+      roomOwner: details.roomOwner,
+      username: details.username,
+      roomName: details.roomName,
+      roomDesc: details.roomDesc,
+      roomGenre: details.roomGenre,
+      roomCountry: details.roomCountry || "IN",
+      maxParticipants: details.maxParticipants,
+      isPublicRoom: details.isPublicRoom,
+      musicStreaming: {
+        ...(details.musicStreaming || {}),
+        adminControl: enableAdminControl
+      }
+    };
+
+    const res = await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
+      headers: getGroicHeaders(),
+      ...(httpsAgent ? { httpsAgent } : {}),
+      timeout: 10000
+    });
+
+    return res.data;
+  } catch (err) {
+    if (err.response && err.response.status === 403) {
+      return null;
+    }
+    logAxiosError(err, `Could not update admin control for room ${roomUid}`);
+    return null;
+  }
+}
+
 module.exports = {
   createRoom,
   getRoomDetails,
   deleteRoom,
   getGroicHeaders,
-  getActivePublicRooms
+  getActivePublicRooms,
+  updateRoomAdminControl
 };
