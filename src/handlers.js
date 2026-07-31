@@ -1,9 +1,9 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
-const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE } = require("../config/constants");
+const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS } = require("../config/constants");
 const { askAi } = require("./ask");
-const { getLyricsAndTranslation } = require("./lyrics");
 const { getRoomDetails, getActivePublicRooms, updateRoomAdminControl } = require("./api");
 const { getToken } = require("./auth");
+const { sendOwnerNotification } = require("./notifier");
 const fs = require("fs");
 const path = require("path");
 
@@ -12,31 +12,31 @@ const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 let allowedAdminsCache = [];
 
 const WELCOME_MESSAGES = [
-  "KD : Hey @{username}! Welcome to the room! Grab your headphones and vibe with us! 🎧✨",
-  "KD : Welcome @{username}! Let's listen to some sweet tunes and chat together! 🎶💃",
-  "KD : Look who joined! Welcome @{username}! Feel the music, drop a message, and enjoy! 🎵❤️",
-  "KD : Yay, @{username} is here! Welcome to our musical cozy corner! Let the good vibes roll! 🎸🌟",
-  "KD : Hello @{username}! Welcome to the ultimate music & chat lounge! What's your jam today? 🎙️🎉",
-  "KD : Welcome @{username}! We've got the beats, we've got the chat, all we needed was you! 🔊🥳",
-  "KD : Hey @{username}, welcome aboard! Let the music play and the conversations flow! 🎹✨",
-  "KD : Welcome @{username}! Step in, tune in, and let's make some memories together! 🎷🌈",
-  "KD : Woohoo! @{username} has entered the chat! Let the bass drop and the fun begin! 🎛️🚀",
-  "KD : Welcome @{username}! Grab a drink 🥤, request a song, and join the party! 🥳✨",
-  "KD : Look who's here! Welcome @{username}! Time to tune in to the good times! 📻🎉",
-  "KD : Hey @{username}! Your arrival just increased the vibe level by 100%! 📈🔥",
-  "KD : Welcome @{username}! Ready to rock, roll, and chat? Let's make this day awesome! 🎸💬",
-  "KD : Boom! 💥 @{username} is in the house! Turn up the volume and enjoy the session! 🎵🎧",
-  "KD : Welcome @{username}! A new friend has joined our musical family! Introduce yourself! 🥰🎶",
-  "KD : Hey there @{username}! The playlist just got a little brighter because of you! 🌟🎶",
-  "KD : Welcome @{username}! Let the melody guide your soul and the chat keep you smiling! 💫🎹",
-  "KD : Welcome @{username}! You are officially invited to vibe, chat, and relax with us! 🍹🎶",
-  "KD : Welcome @{username}! Turn the music UP, forget the worries, and chat away! 🔊💃",
-  "KD : Hey @{username}! The beat goes on, and we're so glad you're here to share it! 🥁❤️",
-  "KD : Warm welcome to @{username}! Tell us, what kind of music makes you wanna dance? 🕺🎶",
-  "KD : Ahoy @{username}! Welcome to our harbor of smooth tracks and great chats! 🚢🎵",
-  "KD : Hello @{username}! You've just stepped into the happiest music room on Groic! Enjoy! 🌈🎶",
-  "KD : Welcome @{username}! Ready to lose yourself in the music and find friends in the chat? 🗺️✨",
-  "KD : Hey @{username}! Life is better when we listen together. Welcome to the vibe tribe! 🎧🌾"
+  "Hey @{username}! Welcome to the room! Grab your headphones and vibe with us! 🎧✨",
+  "Welcome @{username}! Let's listen to some sweet tunes and chat together! 🎶💃",
+  "Look who joined! Welcome @{username}! Feel the music, drop a message, and enjoy! 🎵❤️",
+  "Yay, @{username} is here! Welcome to our musical cozy corner! Let the good vibes roll! 🎸🌟",
+  "Hello @{username}! Welcome to the ultimate music & chat lounge! What's your jam today? 🎙️🎉",
+  "Welcome @{username}! We've got the beats, we've got the chat, all we needed was you! 🔊🥳",
+  "Hey @{username}, welcome aboard! Let the music play and the conversations flow! 🎹✨",
+  "Welcome @{username}! Step in, tune in, and let's make some memories together! 🎷🌈",
+  "Woohoo! @{username} has entered the chat! Let the bass drop and the fun begin! 🎛️🚀",
+  "Welcome @{username}! Grab a drink 🥤, request a song, and join the party! 🥳✨",
+  "Look who's here! Welcome @{username}! Time to tune in to the good times! 📻🎉",
+  "Hey @{username}! Your arrival just increased the vibe level by 100%! 📈🔥",
+  "Welcome @{username}! Ready to rock, roll, and chat? Let's make this day awesome! 🎸💬",
+  "Boom! 💥 @{username} is in the house! Turn up the volume and enjoy the session! 🎵🎧",
+  "Welcome @{username}! A new friend has joined our musical family! Introduce yourself! 🥰🎶",
+  "Hey there @{username}! The playlist just got a little brighter because of you! 🌟🎶",
+  "Welcome @{username}! Let the melody guide your soul and the chat keep you smiling! 💫🎹",
+  "Welcome @{username}! You are officially invited to vibe, chat, and relax with us! 🍹🎶",
+  "Welcome @{username}! Turn the music UP, forget the worries, and chat away! 🔊💃",
+  "Hey @{username}! The beat goes on, and we're so glad you're here to share it! 🥁❤️",
+  "Warm welcome to @{username}! Tell us, what kind of music makes you wanna dance? 🕺🎶",
+  "Ahoy @{username}! Welcome to our harbor of smooth tracks and great chats! 🚢🎵",
+  "Hello @{username}! You've just stepped into the happiest music room on Groic! Enjoy! 🌈🎶",
+  "Welcome @{username}! Ready to lose yourself in the music and find friends in the chat? 🗺️✨",
+  "Hey @{username}! Life is better when we listen together. Welcome to the vibe tribe! 🎧🌾"
 ];
 
 function encodeUUID(uuid) {
@@ -380,7 +380,7 @@ function emitAdminControlForRoom(roomUid, enableAdminControl) {
     mainSocket.emit("roomUpdate", { roomUid, adminControl: enableAdminControl });
   }
 
-  updateRoomAdminControl(roomUid, enableAdminControl).catch(() => {});
+  updateRoomAdminControl(roomUid, enableAdminControl).catch(() => { });
 
   const token = getToken();
   const socket = createSocketInstance("https://socket-v2.groic.in", token);
@@ -446,26 +446,6 @@ function splitMessage(text, maxLength = 900) {
   return chunks;
 }
 
-function parseSongTitle(title, artist) {
-  if (!title) return "";
-  let clean = title
-    .replace(/\(\s*official.*?\)/gi, "")
-    .replace(/\[\s*official.*?\]/gi, "")
-    .replace(/\(\s*full.*?\)/gi, "")
-    .replace(/\[\s*full.*?\]/gi, "")
-    .replace(/\(\s*hd.*?\)/gi, "")
-    .replace(/\[\s*hd.*?\]/gi, "")
-    .replace(/#\w+/g, "");
-
-  let parts = clean.split("|").map(p => p.trim()).filter(Boolean);
-  let filtered = parts.filter(p => !/official|video|hd|full|records|t-series|speed|music|label|lyric|audio|4k|202\d|latest\s+punjabi\s+songs/i.test(p));
-  if (filtered.length === 0) filtered = [parts[0] || clean];
-  let result = filtered.slice(0, 2).join(" ");
-  if (artist && !/records|series|speed|music|channel|being\s+punjabi/i.test(artist) && !result.toLowerCase().includes(artist.toLowerCase())) {
-    result += " " + artist;
-  }
-  return result.trim();
-}
 
 function isBotUsername(username) {
   if (!username) return true;
@@ -539,7 +519,7 @@ function processUserList(activeUsers, roomUid) {
       knownUsers.add(userKey);
       if (initialized) {
         if (cleanUsername.toLowerCase() === OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD : Welcome back @${cleanUsername}!`, roomUid);
+          sendChatMessage(`Welcome back @${cleanUsername}!`, roomUid);
         } else {
           const randomIndex = Math.floor(Math.random() * WELCOME_MESSAGES.length);
           const template = WELCOME_MESSAGES[randomIndex];
@@ -654,23 +634,48 @@ function setupChatHandler(roomUid) {
 
       const lowerMsg = message.toLowerCase();
 
+      // ─── Owner Notification Triggers ──────────────────────────────────
+      if (!isBotUsername(senderUsername)) {
+        const isExplicitCmd = (EXPLICIT_CALL_COMMANDS || []).some(
+          (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
+        );
+        const isMentionTrigger = (OWNER_NOTIFY_TRIGGERS || []).some(
+          (trigger) => lowerMsg.includes(trigger.toLowerCase())
+        );
+
+        if (isExplicitCmd || isMentionTrigger) {
+          sendOwnerNotification({
+            senderUsername,
+            messageText: rawMessage,
+            roomUid,
+            isExplicitCall: isExplicitCmd
+          })
+            .then((sent) => {
+              if (sent && isExplicitCmd) {
+                sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
+              }
+            })
+            .catch((err) => console.error("Notification trigger error:", err));
+        }
+      }
+
       // ─── User Status Commands ───────────────────────────────────────
       if (lowerMsg === "!afk") {
         if (!isBotUsername(senderUsername)) {
           userStatuses[senderUsername] = "AFK";
-          sendChatMessage(`KD: @${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
+          sendChatMessage(`@${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
         }
         return;
       } else if (lowerMsg === "!slp") {
         if (!isBotUsername(senderUsername)) {
           userStatuses[senderUsername] = "SLP";
-          sendChatMessage(`KD: @${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
+          sendChatMessage(`@${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
         }
         return;
       } else if (lowerMsg === "!avl") {
         if (!isBotUsername(senderUsername)) {
           userStatuses[senderUsername] = "AVL";
-          sendChatMessage(`KD: @${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
+          sendChatMessage(`@${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
         }
         return;
       } else if (lowerMsg.startsWith("!status")) {
@@ -678,9 +683,9 @@ function setupChatHandler(roomUid) {
         if (parts.length === 1) {
           const users = Object.keys(userStatuses).filter(u => !isBotUsername(u));
           if (users.length === 0) {
-            sendChatMessage(`KD: No active users in the room.`, roomUid);
+            sendChatMessage(`No active users in the room.`, roomUid);
           } else {
-            let reply = "KD: User Statuses:";
+            let reply = "User Statuses:";
             for (const u of users) {
               const status = userStatuses[u];
               let emoji = "🙋";
@@ -697,7 +702,7 @@ function setupChatHandler(roomUid) {
           }
           const targetLower = target.toLowerCase();
           if (isBotUsername(targetLower)) {
-            sendChatMessage(`KD: @${target} is the AI bot.`, roomUid);
+            sendChatMessage(`@${target} is the AI bot.`, roomUid);
             return;
           }
           const keys = Object.keys(userStatuses).filter(u => !isBotUsername(u));
@@ -714,9 +719,9 @@ function setupChatHandler(roomUid) {
             let emoji = "🙋";
             if (status === "AFK") emoji = "📵";
             if (status === "SLP") emoji = "💤";
-            sendChatMessage(`KD: @${matchedUser} - ${status} ${emoji}`, roomUid);
+            sendChatMessage(`@${matchedUser} - ${status} ${emoji}`, roomUid);
           } else {
-            sendChatMessage(`KD: @${target} is not in the room.`, roomUid);
+            sendChatMessage(`@${target} is not in the room.`, roomUid);
           }
         }
         return;
@@ -731,61 +736,86 @@ function setupChatHandler(roomUid) {
           "3. !pick dj — Randomly pick an active member to play the next song.",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "5. !ask <prompt> — Professional & informative AI answer.",
-          "6. !lyrics — Get lyrics & English translation for playing room song 🎵."
+          "6. !callowner / !kd — Send a phone notification to the room owner 🔔."
         ].join("\n");
         sendChatMessage(helpMessage, roomUid);
         return;
       }
 
-      if (lowerMsg.startsWith("!lyrics") || lowerMsg.startsWith("! lyrics")) {
-        const cmdName = lowerMsg.startsWith("!lyrics") ? "!lyrics" : "! lyrics";
-        let songQuery = message.slice(cmdName.length).trim();
-
-        if (!songQuery) {
-          try {
-            const details = await getRoomDetails(roomUid);
-            const musicData = details?.musicStreaming || details?.roomDetails;
-            let songTitle = musicData?.title || details?.title || "";
-            let songArtist = musicData?.artist || details?.artist || "";
-
-            if (!songTitle && Array.isArray(musicData?.playlist)) {
-              const activeItem = musicData.playlist.find(p => p.isPlaying);
-              if (activeItem) {
-                songTitle = activeItem.title || "";
-                songArtist = activeItem.artist || "";
-              }
-            }
-
-            if (songTitle) {
-              songQuery = parseSongTitle(songTitle, songArtist);
-              console.log(`[Lyrics] Auto-detected playing song in room ${roomUid}: "${songQuery}" (raw title: "${songTitle}")`);
-            }
-          } catch (err) {
-            console.error("[Lyrics] Auto-detect error:", err.message);
-          }
-        }
-
-        if (!songQuery) {
-          sendChatMessage("KD: No song is currently playing in the room! Usage: !lyrics <song name>", roomUid);
+      if (lowerMsg.startsWith("!look") || lowerMsg.startsWith("! look")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
-        sendChatMessage(`KD: 🔍 Fetching lyrics & translation for "${songQuery}"...`, roomUid);
-        const result = await getLyricsAndTranslation(songQuery);
-        if (result) {
-          const chunks = splitMessage(result, 900);
-          for (let i = 0; i < chunks.length; i++) {
-            if (i === 0) {
-              sendChatMessage(`KD: 🎵 Lyrics & Translation for "${songQuery}":\n\n${chunks[i]}`, roomUid);
-            } else {
-              sendChatMessage(chunks[i], roomUid);
-            }
-            if (chunks.length > 1 && i < chunks.length - 1) {
-              await new Promise(r => setTimeout(r, 400));
+        const cmdName = lowerMsg.startsWith("!look") ? "!look" : "! look";
+        let targetUser = message.slice(cmdName.length).trim();
+
+        if (targetUser.startsWith("@")) {
+          targetUser = targetUser.slice(1).trim();
+        }
+
+        if (!targetUser) {
+          sendChatMessage(`Please specify a username. Usage: !look <username>`, roomUid);
+          return;
+        }
+
+        const targetLower = targetUser.toLowerCase();
+
+        try {
+          const rooms = await getActivePublicRooms();
+          if (!rooms || rooms.length === 0) {
+            sendChatMessage(`Could not find any active public rooms.`, roomUid);
+            return;
+          }
+
+          let foundRooms = [];
+
+          for (const room of rooms) {
+            const activeUsers = room.activeUsers || [];
+            const isOnline = activeUsers.some(u =>
+              (u.username && u.username.toLowerCase() === targetLower) ||
+              (u.name && u.name.toLowerCase() === targetLower)
+            );
+
+            if (isOnline) {
+              const roomName = room.roomName || "Unnamed Room";
+              const roomUidVal = room.roomUid || room._id || "";
+              const ownerName = room.username || room.ownerUid || "Unknown";
+
+              const otherUsers = activeUsers.filter(u =>
+                (!u.username || u.username.toLowerCase() !== targetLower) &&
+                (!u.name || u.name.toLowerCase() !== targetLower)
+              );
+
+              const otherUsersList = otherUsers
+                .map(u => u.username ? `@${u.username}` : (u.name || "Unknown"));
+
+              foundRooms.push({
+                roomName,
+                roomUidVal,
+                ownerName,
+                otherUsersList
+              });
             }
           }
-        } else {
-          sendChatMessage(`KD: Could not find lyrics for "${songQuery}".`, roomUid);
+
+          if (foundRooms.length > 0) {
+            for (const item of foundRooms) {
+              const roomDisplay = item.roomUidVal ? `"${item.roomName}" (${item.roomUidVal})` : `"${item.roomName}"`;
+              if (item.otherUsersList.length > 0) {
+                const userListStr = item.otherUsersList.join("\n");
+                sendChatMessage(`@${targetUser} is in room ${roomDisplay} owned by @${item.ownerName} with \n${userListStr}`, roomUid);
+              } else {
+                sendChatMessage(`@${targetUser} is in room ${roomDisplay} owned by @${item.ownerName}`, roomUid);
+              }
+            }
+          } else {
+            sendChatMessage(`@${targetUser} is not online in any public room.`, roomUid);
+          }
+        } catch (err) {
+          console.error("[!look] Error searching public rooms:", err.message);
+          sendChatMessage(`Error searching public rooms for @${targetUser}.`, roomUid);
         }
         return;
       }
@@ -821,7 +851,7 @@ function setupChatHandler(roomUid) {
         }
       } else if (message.toLowerCase().startsWith("!kick_all rooms ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: @${senderUsername} only the owner can use !kick_all rooms.`, roomUid);
+          sendChatMessage(`@${senderUsername} only the owner can use !kick_all rooms.`, roomUid);
           return;
         }
 
@@ -861,7 +891,7 @@ function setupChatHandler(roomUid) {
         });
       } else if (message.toLowerCase().startsWith("!unkick_all rooms ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: @${senderUsername} only the owner can use !unkick_all rooms.`, roomUid);
+          sendChatMessage(`@${senderUsername} only the owner can use !unkick_all rooms.`, roomUid);
           return;
         }
 
@@ -901,7 +931,7 @@ function setupChatHandler(roomUid) {
         });
       } else if (message.toLowerCase().startsWith("!kick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -925,7 +955,7 @@ function setupChatHandler(roomUid) {
         emitKickUserForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!kick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -941,7 +971,7 @@ function setupChatHandler(roomUid) {
         emitKickUserForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unkick room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -957,7 +987,7 @@ function setupChatHandler(roomUid) {
         emitKickUserForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!unkick ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -967,7 +997,7 @@ function setupChatHandler(roomUid) {
         emitKickUserForRoom(roomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!admin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -983,7 +1013,7 @@ function setupChatHandler(roomUid) {
         emitAddAdminForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase() === "!admin" || message.toLowerCase().startsWith("!admin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -996,7 +1026,7 @@ function setupChatHandler(roomUid) {
         emitAddAdminForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unadmin room ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -1018,7 +1048,7 @@ function setupChatHandler(roomUid) {
         emitAddAdminForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase() === "!unadmin" || message.toLowerCase().startsWith("!unadmin ")) {
         if (!isAllowedAdminUser(senderUsername)) {
-          sendChatMessage(`KD: @${senderUsername} you do not have admin permissions.`, roomUid);
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
@@ -1037,7 +1067,7 @@ function setupChatHandler(roomUid) {
         emitAddAdminForRoom(roomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!allow ") || message.toLowerCase().startsWith("! allow ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: @${senderUsername} only the owner can use !allow.`, roomUid);
+          sendChatMessage(`@${senderUsername} only the owner can use !allow.`, roomUid);
           return;
         }
 
@@ -1058,7 +1088,7 @@ function setupChatHandler(roomUid) {
         saveAllowedAdminsAndSync(currentAdminsList, roomUid);
       } else if (message.toLowerCase().startsWith("!revoke ") || message.toLowerCase().startsWith("! revoke ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: @${senderUsername} only the owner can use !revoke.`, roomUid);
+          sendChatMessage(`@${senderUsername} only the owner can use !revoke.`, roomUid);
           return;
         }
 
@@ -1079,16 +1109,16 @@ function setupChatHandler(roomUid) {
         saveAllowedAdminsAndSync(updatedAdmins, roomUid);
       } else if (message.toLowerCase() === "!allowed" || message.toLowerCase() === "! allowed") {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`KD: @${senderUsername} only the owner can use !allowed.`, roomUid);
+          sendChatMessage(`@${senderUsername} only the owner can use !allowed.`, roomUid);
           return;
         }
 
         const list = loadAllowedAdmins();
         if (list.length === 0) {
-          sendChatMessage(`KD: No users have allowed admin permissions except the room owner (@${OWNER_USERNAME}).`, roomUid);
+          sendChatMessage(`No users have allowed admin permissions except the room owner (@${OWNER_USERNAME}).`, roomUid);
         } else {
           const listStr = list.map(u => `@${u}`).join(", ");
-          sendChatMessage(`KD: Allowed users: ${listStr}`, roomUid);
+          sendChatMessage(`Allowed users: ${listStr}`, roomUid);
         }
       } else if (
         lowerMsg === "!enable admin" || lowerMsg.startsWith("!enable admin ") ||
@@ -1120,8 +1150,7 @@ function setupChatHandler(roomUid) {
         emitAdminControlForRoom(targetRoomUid, false);
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
-        const isBotResponse = message.startsWith("KD :") ||
-          message.startsWith("KD:") ||
+        const isBotResponse = isBotUsername(senderUsername) ||
           senderUsername === " " ||
           senderUsername.toLowerCase().trim() === OWNER_USERNAME.toLowerCase().trim();
         const isCommand = message.startsWith("!");

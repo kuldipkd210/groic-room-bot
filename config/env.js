@@ -8,6 +8,7 @@ const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PORT = process.env.PORT || 10000;
 const ROOM_UID = process.env.ROOM_UID || null; // Set this on Render to skip HTTP room creation
+const NTFY_TOPIC = process.env.NTFY_TOPIC || "groic_bot_alerts_kd";
 
 if (!FIREBASE_API_KEY || !REFRESH_TOKEN) {
   console.error("Missing FIREBASE_API_KEY or REFRESH_TOKEN environment variable");
@@ -22,5 +23,6 @@ module.exports = {
   GEMINI_API_KEY,
   GEMINI_MODEL,
   PORT,
-  ROOM_UID
+  ROOM_UID,
+  NTFY_TOPIC
 };

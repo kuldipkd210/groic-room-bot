@@ -14,5 +14,19 @@ module.exports = {
     { uid: "", copyAvatarFrom: "" },
     // Example 1: { uid: "room_id", copyAvatarFrom: "username" } -> Copies the avatar of a specific user already in the room
     // Example 2: { uid: "room_id", imageUrl: "https://example.com/img.jpg" } -> Sets a custom direct image URL
-  ]
+  ],
+
+  OWNER_NOTIFY_TRIGGERS: [
+    "@owner",
+    "owner",
+    "@kd",
+    "kd",
+    "kd_zoro"
+  ],
+  EXPLICIT_CALL_COMMANDS: [
+    "!callowner",
+    "!callkd",
+    "!kd"
+  ],
+  NOTIFY_COOLDOWN_MS: 120000 // 2 minutes (120 seconds) between phone alerts
 };
