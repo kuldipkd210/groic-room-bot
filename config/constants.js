@@ -28,5 +28,13 @@ module.exports = {
     "!callkd",
     "!kd"
   ],
-  NOTIFY_COOLDOWN_MS: 120000 // 2 minutes (120 seconds) between phone alerts
+  FRIEND_CALL_COMMANDS: [
+    {
+      commands: ["!404", "!ded"],
+      username: "dedsec_404",
+      topic: "dedsec_404",
+      triggers: []
+    }
+  ],
+  NOTIFY_COOLDOWN_MS: 60000 // 1 minute (60 seconds) between phone alerts
 };

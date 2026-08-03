@@ -1,9 +1,9 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
-const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS } = require("../config/constants");
+const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms, updateRoomAdminControl } = require("./api");
 const { getToken } = require("./auth");
-const { sendOwnerNotification } = require("./notifier");
+const { sendOwnerNotification, sendUserNotification } = require("./notifier");
 const fs = require("fs");
 const path = require("path");
 
@@ -657,6 +657,30 @@ function setupChatHandler(roomUid) {
             })
             .catch((err) => console.error("Notification trigger error:", err));
         }
+
+        // ─── Friend Notification Triggers ─────────────────────────────────
+        for (const friend of (FRIEND_CALL_COMMANDS || [])) {
+          const isFriendCmd = (friend.commands || []).some(
+            (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
+          );
+
+          if (isFriendCmd) {
+            sendUserNotification({
+              topic: friend.topic,
+              targetName: friend.username,
+              senderUsername,
+              messageText: rawMessage,
+              roomUid,
+              isExplicitCall: true
+            })
+              .then((sent) => {
+                if (sent) {
+                  sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
+                }
+              })
+              .catch((err) => console.error("Friend notification trigger error:", err));
+          }
+        }
       }
 
       // ─── User Status Commands ───────────────────────────────────────
@@ -730,14 +754,13 @@ function setupChatHandler(roomUid) {
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!help") {
         const helpMessage = [
           "Available public Commands:",
-          "",
           "1. !afk / !slp / !avl — Set your status to AFK 📵, SLP 💤, or AVL 🙋.",
           "2. !status — View active user statuses in the room.",
           "3. !pick dj — Randomly pick an active member to play the next song.",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "5. !ask <prompt> — Professional & informative AI answer.",
-          "6. !callowner / !kd — Send a phone notification to the room owner 🔔."
-        ].join("\n");
+          "6. !callowner / !kd — Send a phone notification to the room owner 🔔.",
+        ].join("\n\n");
         sendChatMessage(helpMessage, roomUid);
         return;
       }
