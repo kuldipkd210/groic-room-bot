@@ -89,6 +89,7 @@ async function searchWeb(query) {
 function cleanText(text) {
   if (!text) return "";
   return text
+    .replace(/<think>[\s\S]*?<\/think>/gi, "")
     .replace(/\*\*/g, "")
     .replace(/\*/g, "")
     .replace(/`/g, "")
@@ -104,9 +105,10 @@ function cleanText(text) {
  * @param {string} [mode="ask"] - Mode: "ask" for professional/informative, "xai" for funny/sarcastic Xaix personality
  * @param {string} [roomUid] - Room identifier
  * @param {string} [senderUsername] - Username of the sender
+ * @param {number} [maxTokens=500] - Max output tokens
  * @returns {Promise<string|null>}
  */
-async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "", maxTokens = 250) {
+async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "", maxTokens = 500) {
   if (!GROQ_API_KEY) {
     console.log("[Ask] GROQ_API_KEY is not set");
     return null;
@@ -176,24 +178,29 @@ async function askAi(question, mode = "ask", roomUid = "default", senderUsername
     { role: "user", content: userContent }
   ];
 
-  try {
-    const res = await callGroq({
-      model: GROQ_MODEL || "llama-3.3-70b-versatile",
-      messages,
-      temperature: mode === "xai" ? 0.75 : 0.4,
-      max_tokens: maxTokens
-    });
+  const candidateModels = [GROQ_MODEL || "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
+  // Deduplicate candidate models
+  const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
 
-    let answer = res?.data?.choices?.[0]?.message?.content?.trim();
-    if (!answer) return null;
+  for (const model of modelsToTry) {
+    try {
+      const res = await callGroq({
+        model,
+        messages,
+        temperature: mode === "xai" ? 0.75 : 0.4,
+        max_tokens: maxTokens
+      });
 
-    answer = cleanText(answer);
-
-    return answer;
-  } catch (err) {
-    console.log("[Ask] Failed to fetch answer:", err.message);
-    return null;
+      let answer = res?.data?.choices?.[0]?.message?.content?.trim();
+      if (answer) {
+        return cleanText(answer);
+      }
+    } catch (err) {
+      console.log(`[Ask] Error with model ${model}:`, err?.response?.data?.error?.message || err.message);
+    }
   }
+
+  return null;
 }
 
 module.exports = {

@@ -3,7 +3,7 @@ require("dotenv").config({ override: true });
 const FIREBASE_API_KEY = process.env.FIREBASE_API_KEY;
 const REFRESH_TOKEN = process.env.REFRESH_TOKEN;
 const GROQ_API_KEY = process.env.GROQ_API_KEY || "";
-const GROQ_MODEL = process.env.GROQ_MODEL || "llama-3.3-70b-versatile";
+const GROQ_MODEL = process.env.GROQ_MODEL || "openai/gpt-oss-120b";
 const GEMINI_API_KEY = process.env.GEMINI_API_KEY || "";
 const GEMINI_MODEL = process.env.GEMINI_MODEL || "gemini-2.5-flash";
 const PORT = process.env.PORT || 10000;
