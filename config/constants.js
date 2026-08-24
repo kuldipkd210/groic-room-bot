@@ -33,7 +33,7 @@ module.exports = {
       commands: ["!404", "!ded"],
       username: "dedsec_404",
       topic: "dedsec_404",
-      triggers: []
+      triggers: ["@dedsec_404", "@ded", "dedsec_404"]
     }
   ],
   NOTIFY_COOLDOWN_MS: 60000 // 1 minute (60 seconds) between phone alerts
