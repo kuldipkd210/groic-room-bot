@@ -4,14 +4,6 @@ const { NOTIFY_COOLDOWN_MS } = require("../config/constants");
 
 const lastNotificationTimes = {};
 
-/**
- * Sends a mobile notification via Ntfy.sh to a specific topic.
- * @param {Object} options
- * @param {string} options.topic - Ntfy topic to publish to
- * @param {string} [options.targetName="user"] - Name/role of target recipient (for logs)
- * @param {string} options.senderUsername - Username of the person calling/mentioning
- * @param {string} options.messageText - The message text containing the mention/call
- * @param {string} options.roomUid - Current Groic room UID
 const roomNameCache = {};
 
 function setCachedRoomName(roomUid, name) {
