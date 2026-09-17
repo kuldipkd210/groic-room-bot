@@ -3,7 +3,7 @@ const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENR
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms, updateRoomAdminControl } = require("./api");
 const { getToken } = require("./auth");
-const { sendOwnerNotification, sendUserNotification } = require("./notifier");
+const { sendOwnerNotification, sendUserNotification, setCachedRoomName } = require("./notifier");
 const { isCallDisabled, setCallDisabled } = require("./storage");
 const fs = require("fs");
 const path = require("path");
@@ -11,6 +11,7 @@ const path = require("path");
 const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
 let allowedAdminsCache = [];
+let currentRoomName = "";
 
 const WELCOME_MESSAGES = [
   "Hey @{username}! Welcome to the room! Grab your headphones and vibe with us! 🎧✨",
@@ -124,6 +125,11 @@ async function syncAllowedAdminsFromCloud(roomUid) {
   try {
     const details = await getRoomDetails(roomUid);
     if (!details) return;
+
+    if (details.roomName) {
+      currentRoomName = details.roomName;
+      setCachedRoomName(roomUid, details.roomName);
+    }
 
     const desc = details.roomDesc || "";
     let blobId = decodeUUID(desc);
@@ -680,33 +686,60 @@ function setupChatHandler(roomUid) {
       if (!isBotUsername(senderUsername)) {
         const senderLower = senderUsername.toLowerCase().trim();
         const ownerLower = (OWNER_USERNAME || "kd_zoro").toLowerCase().trim();
+        const isOwner = senderLower === ownerLower;
 
-        if (senderLower !== ownerLower) {
-          const isExplicitCmd = (EXPLICIT_CALL_COMMANDS || []).some(
-            (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
-          );
-          const isMentionTrigger = (OWNER_NOTIFY_TRIGGERS || []).some(
-            (trigger) => lowerMsg.includes(trigger.toLowerCase())
-          );
+        const isExplicitCmd = (EXPLICIT_CALL_COMMANDS || []).some(
+          (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
+        );
+        const isMentionTrigger = !isOwner && (OWNER_NOTIFY_TRIGGERS || []).some((trigger) => {
+          const t = trigger.toLowerCase().replace(/^@/, "");
+          const regex = new RegExp(`(^|[^a-zA-Z0-9_])@?${t}([^a-zA-Z0-9_]|$)`, "i");
+          return regex.test(lowerMsg);
+        });
 
-          if (isExplicitCmd || isMentionTrigger) {
+        if (isExplicitCmd || isMentionTrigger) {
+          if (isOwner && isExplicitCmd) {
+            // Allow owner to self-test call commands like !kd or !call owner
+            sendOwnerNotification({
+              senderUsername,
+              messageText: rawMessage,
+              roomUid,
+              roomName: currentRoomName,
+              isExplicitCall: true,
+              isSelfTest: true
+            })
+              .then((res) => {
+                if (res && res.success) {
+                  sendChatMessage(`@${senderUsername}, test call sent! Check your phone notification 🔔`, roomUid);
+                } else if (res && res.reason === "cooldown") {
+                  sendChatMessage(`@${senderUsername}, call notification is on cooldown. Please wait ${res.remainingSec}s before testing again ⏳`, roomUid);
+                } else {
+                  sendChatMessage(`@${senderUsername}, could not send phone notification right now.`, roomUid);
+                }
+              })
+              .catch((err) => console.error("Notification trigger error:", err));
+          } else if (!isOwner) {
             if (isCallDisabled(OWNER_USERNAME)) {
-              const now = Date.now();
-              const lastOfflineMsg = lastUnreachableReplyTime[ownerLower] || 0;
-              if (isExplicitCmd || (now - lastOfflineMsg > 15000)) {
-                lastUnreachableReplyTime[ownerLower] = now;
-                sendChatMessage(`@${senderUsername}, Owner is not rechable at this moment`, roomUid);
+              if (isExplicitCmd) {
+                sendChatMessage(`@${senderUsername}, Owner is not reachable at this moment 🔕`, roomUid);
               }
             } else {
               sendOwnerNotification({
                 senderUsername,
                 messageText: rawMessage,
                 roomUid,
+                roomName: currentRoomName,
                 isExplicitCall: isExplicitCmd
               })
-                .then((sent) => {
-                  if (sent && isExplicitCmd) {
-                    sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
+                .then((res) => {
+                  if (isExplicitCmd) {
+                    if (res && res.success) {
+                      sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
+                    } else if (res && res.reason === "cooldown") {
+                      sendChatMessage(`@${senderUsername}, a notification was already sent to the owner recently! Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
+                    } else {
+                      sendChatMessage(`@${senderUsername}, failed to send notification to the owner right now.`, roomUid);
+                    }
                   }
                 })
                 .catch((err) => console.error("Notification trigger error:", err));
@@ -717,38 +750,63 @@ function setupChatHandler(roomUid) {
         // ─── Friend Notification Triggers ─────────────────────────────────
         for (const friend of (FRIEND_CALL_COMMANDS || [])) {
           const friendLower = (friend.username || "").toLowerCase().trim();
-          if (senderLower === friendLower) continue;
+          const isFriendUser = senderLower === friendLower;
 
           const isFriendCmd = (friend.commands || []).some(
             (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
           );
-          const isFriendMention = (friend.triggers || []).some(
-            (trigger) => lowerMsg.includes(trigger.toLowerCase())
-          ) || lowerMsg.includes(`@${friendLower}`);
+          const isFriendMention = !isFriendUser && ((friend.triggers || []).some((trigger) => {
+            const t = trigger.toLowerCase().replace(/^@/, "");
+            const regex = new RegExp(`(^|[^a-zA-Z0-9_])@?${t}([^a-zA-Z0-9_]|$)`, "i");
+            return regex.test(lowerMsg);
+          }) || new RegExp(`(^|[^a-zA-Z0-9_])@?${friendLower}([^a-zA-Z0-9_]|$)`, "i").test(lowerMsg));
 
           if (isFriendCmd || isFriendMention) {
-            if (isCallDisabled(friend.username)) {
-              const now = Date.now();
-              const lastOfflineMsg = lastUnreachableReplyTime[friendLower] || 0;
-              if (isFriendCmd || (now - lastOfflineMsg > 15000)) {
-                lastUnreachableReplyTime[friendLower] = now;
-                sendChatMessage(`@${senderUsername}, @${friend.username} is not rechable at this moment`, roomUid);
-              }
-            } else {
+            if (isFriendUser && isFriendCmd) {
               sendUserNotification({
                 topic: friend.topic,
                 targetName: friend.username,
                 senderUsername,
                 messageText: rawMessage,
                 roomUid,
-                isExplicitCall: isFriendCmd
+                roomName: currentRoomName,
+                isExplicitCall: true,
+                isSelfTest: true
               })
-                .then((sent) => {
-                  if (sent && isFriendCmd) {
-                    sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
+                .then((res) => {
+                  if (res && res.success) {
+                    sendChatMessage(`@${senderUsername}, test call sent to ${friend.username}! 🔔`, roomUid);
+                  } else if (res && res.reason === "cooldown") {
+                    sendChatMessage(`@${senderUsername}, notification is on cooldown. Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
                   }
                 })
                 .catch((err) => console.error("Friend notification trigger error:", err));
+            } else if (!isFriendUser) {
+              if (isCallDisabled(friend.username)) {
+                if (isFriendCmd) {
+                  sendChatMessage(`@${senderUsername}, @${friend.username} is not reachable at this moment 🔕`, roomUid);
+                }
+              } else {
+                sendUserNotification({
+                  topic: friend.topic,
+                  targetName: friend.username,
+                  senderUsername,
+                  messageText: rawMessage,
+                  roomUid,
+                  roomName: currentRoomName,
+                  isExplicitCall: isFriendCmd
+                })
+                  .then((res) => {
+                    if (isFriendCmd) {
+                      if (res && res.success) {
+                        sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
+                      } else if (res && res.reason === "cooldown") {
+                        sendChatMessage(`@${senderUsername}, a notification was already sent to ${friend.username} recently! Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
+                      }
+                    }
+                  })
+                  .catch((err) => console.error("Friend notification trigger error:", err));
+              }
             }
           }
         }
@@ -830,8 +888,9 @@ function setupChatHandler(roomUid) {
           "3. !pick dj — Randomly pick an active member to play the next song.",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "5. !ask <prompt> — Professional & informative AI answer.",
-          "6. !callowner / !kd — Send a phone notification to the room owner 🔔.",
-          "7. !call off / !call on — Toggle call/mention notifications (Owner & Authorized users) 🔕.",
+          "6. !kd / !call kd — Send a phone notification to the room owner 🔔.",
+          "7. !404 / !call ded — Send a phone notification to dedsec_404 🔔.",
+          "8. !call off / !call on — Toggle call/mention notifications (Owner & Authorized users) 🔕.",
         ].join("\n\n");
         sendChatMessage(helpMessage, roomUid);
         return;

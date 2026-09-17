@@ -17,23 +17,22 @@ module.exports = {
   ],
 
   OWNER_NOTIFY_TRIGGERS: [
-    "@owner",
-    "owner",
-    "@kd",
     "kd",
-    "kd_zoro"
+    "zoro"
   ],
   EXPLICIT_CALL_COMMANDS: [
-    "!callowner",
-    "!callkd",
-    "!kd"
+    "!kd",
+    "!call kd"
   ],
   FRIEND_CALL_COMMANDS: [
     {
-      commands: ["!404", "!ded"],
+      commands: [
+        "!404",
+        "!call ded"
+      ],
       username: "dedsec_404",
       topic: "dedsec_404",
-      triggers: ["@dedsec_404", "@ded", "dedsec_404"]
+      triggers: ["ded", "dedsec_404", "404"]
     }
   ],
   NOTIFY_COOLDOWN_MS: 60000 // 1 minute (60 seconds) between phone alerts
