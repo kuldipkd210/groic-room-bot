@@ -11,15 +11,24 @@ async function refreshSingleToken(refreshToken) {
   params.append("grant_type", "refresh_token");
   params.append("refresh_token", refreshToken);
 
-  const res = await axios.post(url, params.toString(), {
-    headers: {
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    timeout: 20000,
-    proxy: false
-  });
+  try {
+    const res = await axios.post(url, params.toString(), {
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        Referer: "https://groic.in/",
+        Origin: "https://groic.in"
+      },
+      timeout: 20000,
+      proxy: false
+    });
 
-  return res.data.id_token || res.data.access_token;
+    return res.data.id_token || res.data.access_token;
+  } catch (err) {
+    if (err.response && err.response.data) {
+      console.error("Firebase refreshSingleToken error:", JSON.stringify(err.response.data));
+    }
+    throw err;
+  }
 }
 
 async function refreshAccessToken() {
