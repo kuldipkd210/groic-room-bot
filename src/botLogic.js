@@ -163,6 +163,9 @@ async function runForever() {
       }
     } catch (err) {
       console.log("Error in runForever loop:", err.message);
+      if (err.response && err.response.data) {
+        console.log("Error details:", JSON.stringify(err.response.data));
+      }
       botStarted = false;
     }
     await sleep(30000); // Check status every 30 seconds

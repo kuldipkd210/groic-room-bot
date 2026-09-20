@@ -10,21 +10,30 @@ async function refreshAccessToken() {
   params.append("grant_type", "refresh_token");
   params.append("refresh_token", REFRESH_TOKEN);
 
-  const res = await axios.post(url, params.toString(), {
-    headers: {
-      "content-type": "application/x-www-form-urlencoded"
-    },
-    timeout: 20000,
-    proxy: false
-  });
+  try {
+    const res = await axios.post(url, params.toString(), {
+      headers: {
+        "content-type": "application/x-www-form-urlencoded",
+        Referer: "https://groic.in/",
+        Origin: "https://groic.in"
+      },
+      timeout: 20000,
+      proxy: false
+    });
 
-  TOKEN = res.data.id_token || res.data.access_token;
+    TOKEN = res.data.id_token || res.data.access_token;
 
-  if (!TOKEN) {
-    throw new Error("No token received from Firebase refresh API");
+    if (!TOKEN) {
+      throw new Error("No token received from Firebase refresh API");
+    }
+
+    return TOKEN;
+  } catch (err) {
+    if (err.response && err.response.data) {
+      console.error("Firebase refreshAccessToken error:", JSON.stringify(err.response.data));
+    }
+    throw err;
   }
-
-  return TOKEN;
 }
 
 function getToken() {
