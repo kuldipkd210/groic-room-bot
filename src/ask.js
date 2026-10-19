@@ -22,8 +22,8 @@ async function callGroq(payload) {
           "Content-Type": "application/json",
           "Authorization": `Bearer ${GROQ_API_KEY}`
         },
-        timeout: 15000,
-        ...(httpsAgent ? { httpsAgent } : {})
+        timeout: 12000,
+        proxy: false
       };
 
       const res = await axios.post(GROQ_URL, payload, config);
@@ -108,7 +108,7 @@ function cleanText(text) {
  * @param {number} [maxTokens=500] - Max output tokens
  * @returns {Promise<string|null>}
  */
-async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "", maxTokens = 220) {
+async function askAi(question, mode = "ask", roomUid = "default", senderUsername = "", maxTokens = 450) {
   if (!GROQ_API_KEY) {
     console.log("[Ask] GROQ_API_KEY is not set");
     return null;
@@ -172,7 +172,11 @@ async function askAi(question, mode = "ask", roomUid = "default", senderUsername
     { role: "user", content: userContent }
   ];
 
-  const candidateModels = [GROQ_MODEL || "openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.6-27b"];
+  const candidateModels = [
+    GROQ_MODEL || "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b",
+    "openai/gpt-oss-20b"
+  ];
   // Deduplicate candidate models
   const modelsToTry = [...new Set(candidateModels.filter(Boolean))];
 
