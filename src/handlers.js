@@ -257,6 +257,21 @@ let botJoinedOnce = false; // true after bot is found in active users at least o
 let chatHistory = []; // Stores rolling { username, message } recent messages
 let currentAdmins = [];
 const userStatuses = {};
+
+function getUserStatusObj(username) {
+  const val = userStatuses[username];
+  if (!val) {
+    return { status: "AVL", reason: "" };
+  }
+  if (typeof val === "string") {
+    return { status: val, reason: "" };
+  }
+  return {
+    status: val.status || "AVL",
+    reason: val.reason || ""
+  };
+}
+
 const pendingAutoAdmins = new Set();
 let activeRoomUid = null;
 
@@ -448,7 +463,10 @@ function processUserList(activeUsers, roomUid) {
 
     // Initialize default status to AVL if not already set
     if (!userStatuses[cleanUsername]) {
-      userStatuses[cleanUsername] = "AVL";
+      userStatuses[cleanUsername] = {
+        status: "AVL",
+        reason: ""
+      };
     }
 
     // Instant auto-admin: Whenever an allowed_admin joins/is in the room, grant them admin status instantly
@@ -667,66 +685,46 @@ function setupChatHandler(roomUid) {
           }
         }
         return;
-      } else if (lowerMsg === "!avl" || lowerMsg.startsWith("!avl") || lowerMsg.startsWith("! avl")) {
+      } else if (lowerMsg === "!avl" || lowerMsg.startsWith("!avl ") || lowerMsg.startsWith("! avl")) {
         if (!isBotUsername(senderUsername)) {
+          let reason = "";
+          if (lowerMsg.startsWith("!avl ")) {
+            reason = message.slice("!avl ".length).trim();
+          } else if (lowerMsg.startsWith("! avl ")) {
+            reason = message.slice("! avl ".length).trim();
+          }
+          reason = reason.replace(/^["']|["']$/g, "").trim();
+
           userStatuses[senderUsername] = {
             status: "AVL",
-            reason: ""
+            reason: reason
           };
-          sendChatMessage(`@${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
+          if (reason) {
+            sendChatMessage(`@${senderUsername} is now AVL 🙋 "${reason}"\n(Use !status to view all user statuses)`, roomUid);
+          } else {
+            sendChatMessage(`@${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
+          }
         }
         return;
-      } else if (lowerMsg.startsWith("!status")) {
-        const parts = message.trim().split(/\s+/);
-        if (parts.length === 1) {
-          const users = Object.keys(userStatuses).filter(u => !isBotUsername(u));
-          if (users.length === 0) {
-            sendChatMessage(`No active users in the room.`, roomUid);
-          } else {
-            let reply = "User Statuses:";
-            for (const u of users) {
-              const info = getUserStatusObj(u);
-              if (info.status === "AFK" && info.reason) {
-                reply += `\n@${u} - AFK 📵 "${info.reason}"`;
-              } else if (info.status === "AFK") {
-                reply += `\n@${u} - AFK 📵`;
-              } else {
-                reply += `\n@${u} - AVL 🙋`;
-              }
-            }
-            sendChatMessage(reply, roomUid);
-          }
+      } else if (lowerMsg === "!status" || lowerMsg.startsWith("!status") || lowerMsg.startsWith("! status")) {
+        const users = Object.keys(userStatuses).filter(u => !isBotUsername(u));
+        if (users.length === 0) {
+          sendChatMessage(`No active users in the room.`, roomUid);
         } else {
-          let target = parts.slice(1).join(" ").trim();
-          if (target.startsWith("@")) {
-            target = target.substring(1);
-          }
-          const targetLower = target.toLowerCase();
-          if (isBotUsername(targetLower)) {
-            sendChatMessage(`@${target} is the AI bot.`, roomUid);
-            return;
-          }
-          const keys = Object.keys(userStatuses).filter(u => !isBotUsername(u));
-          let matchedUser = keys.find(
-            (u) => u.toLowerCase() === targetLower
-          );
-          if (!matchedUser) {
-            matchedUser = keys.find(
-              (u) => u.toLowerCase().startsWith(targetLower)
-            );
-          }
-          if (matchedUser) {
-            const info = getUserStatusObj(matchedUser);
+          let reply = "Member Statuses:";
+          for (const u of users) {
+            const info = getUserStatusObj(u);
             if (info.status === "AFK" && info.reason) {
-              sendChatMessage(`@${matchedUser} - AFK 📵 "${info.reason}"`, roomUid);
+              reply += `\n@${u} - AFK 📵 "${info.reason}"`;
             } else if (info.status === "AFK") {
-              sendChatMessage(`@${matchedUser} - AFK 📵`, roomUid);
+              reply += `\n@${u} - AFK 📵`;
+            } else if (info.reason) {
+              reply += `\n@${u} - AVL 🙋 "${info.reason}"`;
             } else {
-              sendChatMessage(`@${matchedUser} - AVL 🙋`, roomUid);
+              reply += `\n@${u} - AVL 🙋`;
             }
-          } else {
-            sendChatMessage(`@${target} is not in the room.`, roomUid);
           }
+          sendChatMessage(reply, roomUid);
         }
         return;
       }
@@ -739,7 +737,7 @@ function setupChatHandler(roomUid) {
           "   > !afk [reason] — Away from keyboard 📵",
           "   > !avl — Available 🙋",
           "",
-          "2. !status [user] — View active statuses in the room.",
+          "2. !status — View all members' status with reasons.",
           "",
           "3. !pick dj — Randomly pick a member to play the next song.",
           "",
