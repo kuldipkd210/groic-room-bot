@@ -711,14 +711,25 @@ function setupChatHandler(roomUid) {
 
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!help") {
         const helpMessage = [
-          "Available public Commands:",
-          "1. !afk / !slp / !avl — Set your status to AFK 📵, SLP 💤, or AVL 🙋.",
-          "2. !status — View active user statuses in the room.",
-          "3. !pick dj — Randomly pick an active member to play the next song.",
+          "Available Public Commands:",
+          "",
+          "1. Set your status:",
+          "   > !afk — Away from keyboard 📵",
+          "   > !slp — Sleep 💤",
+          "   > !avl — Available 🙋",
+          "",
+          "2. !status [user] — View active statuses in the room.",
+          "",
+          "3. !pick dj — Randomly pick a member to play the next song 🎧.",
+          "",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
+          "",
           "5. !ask <prompt> — Professional & informative AI answer.",
-          "6. !callowner / !kd — Send a phone notification to the room owner 🔔.",
-        ].join("\n\n");
+          "",
+          "6. !callowner / !kd — Send phone alert to the room owner 🔔.",
+          "",
+          "7. !ded / !404 — Send phone alert to dedsec_404 🔔."
+        ].join("\n");
         sendChatMessage(helpMessage, roomUid);
         return;
       }
