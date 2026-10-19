@@ -8,31 +8,25 @@ module.exports = {
   ROOM_GENRE: ["Classical", "Popular"],
   MAX_PARTICIPANTS: 50,
   ROOM_FILE: "room.json",
-  // You can pass a string ID, or an object with custom properties.
-
-  GHOST_ROOMS: [
-    { uid: "", copyAvatarFrom: "" },
-    // Example 1: { uid: "room_id", copyAvatarFrom: "username" } -> Copies the avatar of a specific user already in the room
-    // Example 2: { uid: "room_id", imageUrl: "https://example.com/img.jpg" } -> Sets a custom direct image URL
-  ],
 
   OWNER_NOTIFY_TRIGGERS: [
+    "@owner",
+    "owner",
+    "@kd",
     "kd",
-    "zoro"
+    "kd_zoro"
   ],
   EXPLICIT_CALL_COMMANDS: [
-    "!kd",
-    "!call kd"
+    "!callowner",
+    "!callkd",
+    "!kd"
   ],
   FRIEND_CALL_COMMANDS: [
     {
-      commands: [
-        "!404",
-        "!call ded"
-      ],
+      commands: ["!404", "!ded"],
       username: "dedsec_404",
       topic: "dedsec_404",
-      triggers: ["ded", "dedsec_404", "404"]
+      triggers: []
     }
   ],
   NOTIFY_COOLDOWN_MS: 60000 // 1 minute (60 seconds) between phone alerts

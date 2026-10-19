@@ -1,45 +1,17 @@
 const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS } = require("../config/constants");
 const { askAi } = require("./ask");
-const { getRoomDetails, getActivePublicRooms, updateRoomAdminControl } = require("./api");
+const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
-const { sendOwnerNotification, sendUserNotification, setCachedRoomName } = require("./notifier");
-const { isCallDisabled, setCallDisabled } = require("./storage");
+const { sendOwnerNotification, sendUserNotification } = require("./notifier");
 const fs = require("fs");
 const path = require("path");
 
 const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
 let allowedAdminsCache = [];
-let currentRoomName = "";
 
-const WELCOME_MESSAGES = [
-  "Hey @{username}! Welcome to the room! Grab your headphones and vibe with us! 🎧✨",
-  "Welcome @{username}! Let's listen to some sweet tunes and chat together! 🎶💃",
-  "Look who joined! Welcome @{username}! Feel the music, drop a message, and enjoy! 🎵❤️",
-  "Yay, @{username} is here! Welcome to our musical cozy corner! Let the good vibes roll! 🎸🌟",
-  "Hello @{username}! Welcome to the ultimate music & chat lounge! What's your jam today? 🎙️🎉",
-  "Welcome @{username}! We've got the beats, we've got the chat, all we needed was you! 🔊🥳",
-  "Hey @{username}, welcome aboard! Let the music play and the conversations flow! 🎹✨",
-  "Welcome @{username}! Step in, tune in, and let's make some memories together! 🎷🌈",
-  "Woohoo! @{username} has entered the chat! Let the bass drop and the fun begin! 🎛️🚀",
-  "Welcome @{username}! Grab a drink 🥤, request a song, and join the party! 🥳✨",
-  "Look who's here! Welcome @{username}! Time to tune in to the good times! 📻🎉",
-  "Hey @{username}! Your arrival just increased the vibe level by 100%! 📈🔥",
-  "Welcome @{username}! Ready to rock, roll, and chat? Let's make this day awesome! 🎸💬",
-  "Boom! 💥 @{username} is in the house! Turn up the volume and enjoy the session! 🎵🎧",
-  "Welcome @{username}! A new friend has joined our musical family! Introduce yourself! 🥰🎶",
-  "Hey there @{username}! The playlist just got a little brighter because of you! 🌟🎶",
-  "Welcome @{username}! Let the melody guide your soul and the chat keep you smiling! 💫🎹",
-  "Welcome @{username}! You are officially invited to vibe, chat, and relax with us! 🍹🎶",
-  "Welcome @{username}! Turn the music UP, forget the worries, and chat away! 🔊💃",
-  "Hey @{username}! The beat goes on, and we're so glad you're here to share it! 🥁❤️",
-  "Warm welcome to @{username}! Tell us, what kind of music makes you wanna dance? 🕺🎶",
-  "Ahoy @{username}! Welcome to our harbor of smooth tracks and great chats! 🚢🎵",
-  "Hello @{username}! You've just stepped into the happiest music room on Groic! Enjoy! 🌈🎶",
-  "Welcome @{username}! Ready to lose yourself in the music and find friends in the chat? 🗺️✨",
-  "Hey @{username}! Life is better when we listen together. Welcome to the vibe tribe! 🎧🌾"
-];
+
 
 function encodeUUID(uuid) {
   const hex = uuid.replace(/-/g, "");
@@ -125,11 +97,6 @@ async function syncAllowedAdminsFromCloud(roomUid) {
   try {
     const details = await getRoomDetails(roomUid);
     if (!details) return;
-
-    if (details.roomName) {
-      currentRoomName = details.roomName;
-      setCachedRoomName(roomUid, details.roomName);
-    }
 
     const desc = details.roomDesc || "";
     let blobId = decodeUUID(desc);
@@ -290,8 +257,8 @@ let botJoinedOnce = false; // true after bot is found in active users at least o
 let chatHistory = []; // Stores rolling { username, message } recent messages
 let currentAdmins = [];
 const userStatuses = {};
+const pendingAutoAdmins = new Set();
 let activeRoomUid = null;
-const lastUnreachableReplyTime = {};
 
 function isAllowedAdminUser(username) {
   const normalized = (username || "").toLowerCase().trim();
@@ -369,45 +336,6 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
       username: targetUsername,
       addOrRemove: isKick
     });
-    setTimeout(() => {
-      socket.disconnect();
-    }, 1000);
-  });
-
-  socket.on("connect_error", () => {
-    socket.disconnect();
-  });
-}
-
-function emitAdminControlForRoom(roomUid, enableAdminControl) {
-  const mainSocket = getSocket();
-  if (mainSocket && mainSocket.connected) {
-    mainSocket.emit("adminControl", enableAdminControl);
-    mainSocket.emit("adminControl", { roomUid, enableAdminControl, adminControl: enableAdminControl });
-    mainSocket.emit("adminControl", { adminControl: enableAdminControl });
-    mainSocket.emit("roomUpdate", { roomUid, adminControl: enableAdminControl });
-  }
-
-  updateRoomAdminControl(roomUid, enableAdminControl).catch(() => { });
-
-  const token = getToken();
-  const socket = createSocketInstance("https://socket-v2.groic.in", token);
-
-  socket.on("connect", () => {
-    socket.emit("joinRoom", {
-      roomUid,
-      username: " ",
-      name: " ",
-      imageUrl: "",
-      isBot: false
-    });
-  });
-
-  socket.on("presenceUpdate", () => {
-    socket.emit("adminControl", enableAdminControl);
-    socket.emit("adminControl", { roomUid, enableAdminControl, adminControl: enableAdminControl });
-    socket.emit("adminControl", { adminControl: enableAdminControl });
-    socket.emit("roomUpdate", { roomUid, adminControl: enableAdminControl });
     setTimeout(() => {
       socket.disconnect();
     }, 1000);
@@ -523,16 +451,35 @@ function processUserList(activeUsers, roomUid) {
       userStatuses[cleanUsername] = "AVL";
     }
 
+    // Instant auto-admin: Whenever an allowed_admin joins/is in the room, grant them admin status instantly
+    const isAllowed = isAllowedAdminUser(cleanUsername);
+    if (isAllowed && cleanUsername.toLowerCase() !== OWNER_USERNAME.toLowerCase().trim()) {
+      const isAlreadyAdmin = (currentAdmins || []).some(a => {
+        if (typeof a === "string") return a.toLowerCase() === cleanUsername.toLowerCase();
+        return a?.username && a.username.toLowerCase() === cleanUsername.toLowerCase();
+      });
+
+      if (isAlreadyAdmin) {
+        pendingAutoAdmins.delete(cleanUsername.toLowerCase());
+      } else if (!pendingAutoAdmins.has(cleanUsername.toLowerCase())) {
+        pendingAutoAdmins.add(cleanUsername.toLowerCase());
+        const mainSocket = getSocket();
+        if (mainSocket && mainSocket.connected) {
+          console.log(`[AutoAdmin] Automatically granting admin to allowed admin @${cleanUsername}`);
+          mainSocket.emit("addAdmin", cleanUsername);
+        }
+      }
+    }
+
     if (!knownUsers.has(userKey)) {
       knownUsers.add(userKey);
       if (initialized) {
         if (cleanUsername.toLowerCase() === OWNER_USERNAME.toLowerCase().trim()) {
-          sendChatMessage(`Welcome back @${cleanUsername}!`, roomUid);
+          sendChatMessage(`Welcome back @${cleanUsername}! 👑`, roomUid);
+        } else if (isAllowedAdminUser(cleanUsername)) {
+          sendChatMessage(`Welcome back @${cleanUsername}! 🛡️`, roomUid);
         } else {
-          const randomIndex = Math.floor(Math.random() * WELCOME_MESSAGES.length);
-          const template = WELCOME_MESSAGES[randomIndex];
-          const message = template.replace("{username}", cleanUsername);
-          sendChatMessage(message, roomUid);
+          sendChatMessage(`Welcome @${cleanUsername}! Enjoy the tunes 🎶`, roomUid);
         }
       }
     }
@@ -549,6 +496,7 @@ function processUserList(activeUsers, roomUid) {
   for (const username of Object.keys(userStatuses)) {
     if (!activeUsernames.has(username)) {
       delete userStatuses[username];
+      pendingAutoAdmins.delete(username.toLowerCase());
     }
   }
 
@@ -611,6 +559,8 @@ function stopHandlers() {
     delete userStatuses[key];
   }
 
+  pendingAutoAdmins.clear();
+
   if (keepAliveInterval) {
     clearInterval(keepAliveInterval);
     keepAliveInterval = null;
@@ -642,172 +592,51 @@ function setupChatHandler(roomUid) {
 
       const lowerMsg = message.toLowerCase();
 
-      // ─── Call Toggle Commands (!call off / !call on) ──────────────────
-      const normalizedCmd = lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim();
-      if (
-        normalizedCmd === "!call off" ||
-        normalizedCmd === "!calloff" ||
-        normalizedCmd === "!call on" ||
-        normalizedCmd === "!callon"
-      ) {
-        if (isBotUsername(senderUsername)) return;
-
-        const isOff = normalizedCmd === "!call off" || normalizedCmd === "!calloff";
-        const senderLower = senderUsername.toLowerCase().trim();
-        const ownerLower = (OWNER_USERNAME || "kd_zoro").toLowerCase().trim();
-
-        const matchedFriend = (FRIEND_CALL_COMMANDS || []).find(
-          (f) => f.username && f.username.toLowerCase().trim() === senderLower
-        );
-
-        if (senderLower === ownerLower) {
-          setCallDisabled(OWNER_USERNAME, isOff);
-          if (isOff) {
-            sendChatMessage(`@${senderUsername}, call and mention notifications are now disabled 🔕`, roomUid);
-          } else {
-            sendChatMessage(`@${senderUsername}, call and mention notifications are now enabled 🔔`, roomUid);
-          }
-          return;
-        } else if (matchedFriend) {
-          setCallDisabled(matchedFriend.username, isOff);
-          if (isOff) {
-            sendChatMessage(`@${senderUsername}, call notifications are now disabled 🔕`, roomUid);
-          } else {
-            sendChatMessage(`@${senderUsername}, call notifications are now enabled 🔔`, roomUid);
-          }
-          return;
-        } else {
-          sendChatMessage(`@${senderUsername}, you do not have permission to toggle call settings.`, roomUid);
-          return;
-        }
-      }
-
       // ─── Owner Notification Triggers ──────────────────────────────────
       if (!isBotUsername(senderUsername)) {
-        const senderLower = senderUsername.toLowerCase().trim();
-        const ownerLower = (OWNER_USERNAME || "kd_zoro").toLowerCase().trim();
-        const isOwner = senderLower === ownerLower;
-
         const isExplicitCmd = (EXPLICIT_CALL_COMMANDS || []).some(
           (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
         );
-        const isMentionTrigger = !isOwner && (OWNER_NOTIFY_TRIGGERS || []).some((trigger) => {
-          const t = trigger.toLowerCase().replace(/^@/, "");
-          const regex = new RegExp(`(^|[^a-zA-Z0-9_])@?${t}([^a-zA-Z0-9_]|$)`, "i");
-          return regex.test(lowerMsg);
-        });
+        const isMentionTrigger = (OWNER_NOTIFY_TRIGGERS || []).some(
+          (trigger) => lowerMsg.includes(trigger.toLowerCase())
+        );
 
         if (isExplicitCmd || isMentionTrigger) {
-          if (isOwner && isExplicitCmd) {
-            // Allow owner to self-test call commands like !kd or !call owner
-            sendOwnerNotification({
-              senderUsername,
-              messageText: rawMessage,
-              roomUid,
-              roomName: currentRoomName,
-              isExplicitCall: true,
-              isSelfTest: true
-            })
-              .then((res) => {
-                if (res && res.success) {
-                  sendChatMessage(`@${senderUsername}, test call sent! Check your phone notification 🔔`, roomUid);
-                } else if (res && res.reason === "cooldown") {
-                  sendChatMessage(`@${senderUsername}, call notification is on cooldown. Please wait ${res.remainingSec}s before testing again ⏳`, roomUid);
-                } else {
-                  sendChatMessage(`@${senderUsername}, could not send phone notification right now.`, roomUid);
-                }
-              })
-              .catch((err) => console.error("Notification trigger error:", err));
-          } else if (!isOwner) {
-            if (isCallDisabled(OWNER_USERNAME)) {
-              if (isExplicitCmd) {
-                sendChatMessage(`@${senderUsername}, Owner is not reachable at this moment 🔕`, roomUid);
+          sendOwnerNotification({
+            senderUsername,
+            messageText: rawMessage,
+            roomUid,
+            isExplicitCall: isExplicitCmd
+          })
+            .then((sent) => {
+              if (sent && isExplicitCmd) {
+                sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
               }
-            } else {
-              sendOwnerNotification({
-                senderUsername,
-                messageText: rawMessage,
-                roomUid,
-                roomName: currentRoomName,
-                isExplicitCall: isExplicitCmd
-              })
-                .then((res) => {
-                  if (isExplicitCmd) {
-                    if (res && res.success) {
-                      sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
-                    } else if (res && res.reason === "cooldown") {
-                      sendChatMessage(`@${senderUsername}, a notification was already sent to the owner recently! Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
-                    } else {
-                      sendChatMessage(`@${senderUsername}, failed to send notification to the owner right now.`, roomUid);
-                    }
-                  }
-                })
-                .catch((err) => console.error("Notification trigger error:", err));
-            }
-          }
+            })
+            .catch((err) => console.error("Notification trigger error:", err));
         }
 
         // ─── Friend Notification Triggers ─────────────────────────────────
         for (const friend of (FRIEND_CALL_COMMANDS || [])) {
-          const friendLower = (friend.username || "").toLowerCase().trim();
-          const isFriendUser = senderLower === friendLower;
-
           const isFriendCmd = (friend.commands || []).some(
             (cmd) => lowerMsg === cmd.toLowerCase() || lowerMsg.startsWith(cmd.toLowerCase() + " ")
           );
-          const isFriendMention = !isFriendUser && ((friend.triggers || []).some((trigger) => {
-            const t = trigger.toLowerCase().replace(/^@/, "");
-            const regex = new RegExp(`(^|[^a-zA-Z0-9_])@?${t}([^a-zA-Z0-9_]|$)`, "i");
-            return regex.test(lowerMsg);
-          }) || new RegExp(`(^|[^a-zA-Z0-9_])@?${friendLower}([^a-zA-Z0-9_]|$)`, "i").test(lowerMsg));
 
-          if (isFriendCmd || isFriendMention) {
-            if (isFriendUser && isFriendCmd) {
-              sendUserNotification({
-                topic: friend.topic,
-                targetName: friend.username,
-                senderUsername,
-                messageText: rawMessage,
-                roomUid,
-                roomName: currentRoomName,
-                isExplicitCall: true,
-                isSelfTest: true
-              })
-                .then((res) => {
-                  if (res && res.success) {
-                    sendChatMessage(`@${senderUsername}, test call sent to ${friend.username}! 🔔`, roomUid);
-                  } else if (res && res.reason === "cooldown") {
-                    sendChatMessage(`@${senderUsername}, notification is on cooldown. Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
-                  }
-                })
-                .catch((err) => console.error("Friend notification trigger error:", err));
-            } else if (!isFriendUser) {
-              if (isCallDisabled(friend.username)) {
-                if (isFriendCmd) {
-                  sendChatMessage(`@${senderUsername}, @${friend.username} is not reachable at this moment 🔕`, roomUid);
+          if (isFriendCmd) {
+            sendUserNotification({
+              topic: friend.topic,
+              targetName: friend.username,
+              senderUsername,
+              messageText: rawMessage,
+              roomUid,
+              isExplicitCall: true
+            })
+              .then((sent) => {
+                if (sent) {
+                  sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
                 }
-              } else {
-                sendUserNotification({
-                  topic: friend.topic,
-                  targetName: friend.username,
-                  senderUsername,
-                  messageText: rawMessage,
-                  roomUid,
-                  roomName: currentRoomName,
-                  isExplicitCall: isFriendCmd
-                })
-                  .then((res) => {
-                    if (isFriendCmd) {
-                      if (res && res.success) {
-                        sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
-                      } else if (res && res.reason === "cooldown") {
-                        sendChatMessage(`@${senderUsername}, a notification was already sent to ${friend.username} recently! Please wait ${res.remainingSec}s before calling again ⏳`, roomUid);
-                      }
-                    }
-                  })
-                  .catch((err) => console.error("Friend notification trigger error:", err));
-              }
-            }
+              })
+              .catch((err) => console.error("Friend notification trigger error:", err));
           }
         }
       }
@@ -888,11 +717,39 @@ function setupChatHandler(roomUid) {
           "3. !pick dj — Randomly pick an active member to play the next song.",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "5. !ask <prompt> — Professional & informative AI answer.",
-          "6. !kd / !call kd — Send a phone notification to the room owner 🔔.",
-          "7. !404 / !call ded — Send a phone notification to dedsec_404 🔔.",
-          "8. !call off / !call on — Toggle call/mention notifications (Owner & Authorized users) 🔕.",
+          "6. !callowner / !kd — Send a phone notification to the room owner 🔔.",
         ].join("\n\n");
         sendChatMessage(helpMessage, roomUid);
+        return;
+      }
+
+      if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!ahelp") {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
+          return;
+        }
+
+        const ahelpMessage = [
+          "🛡️ Admin Commands:",
+          "• !look <user> — Find which public room a user is in and who is with them.",
+          "• !admin [user] — Grant admin to yourself or target user in this room.",
+          "• !unadmin [user] — Revoke admin from yourself or target user in this room.",
+          "• !admin room <roomUid> [user] — Grant admin in a remote room.",
+          "• !unadmin room <roomUid> [user] — Revoke admin in a remote room.",
+          "• !kick <user> — Kick a user from this room.",
+          "• !unkick <user> — Unkick a user in this room.",
+          "• !kick room <roomUid> <user> — Kick a user in a remote room.",
+          "• !unkick room <roomUid> <user> — Unkick a user in a remote room.",
+          "",
+          "👑 Owner-Only Commands:",
+          "• !allow <user> — Add a user to allowed admins list.",
+          "• !revoke <user> — Remove a user from allowed admins list.",
+          "• !allowed — View all allowed admin users.",
+          "• !kick_all rooms <user> — Sweep & kick user across ALL public rooms.",
+          "• !unkick_all rooms <user> — Sweep & unkick user across ALL public rooms."
+        ].join("\n");
+
+        sendChatMessage(ahelpMessage, roomUid);
         return;
       }
 
@@ -1274,34 +1131,7 @@ function setupChatHandler(roomUid) {
           const listStr = list.map(u => `@${u}`).join(", ");
           sendChatMessage(`Allowed users: ${listStr}`, roomUid);
         }
-      } else if (
-        lowerMsg === "!enable admin" || lowerMsg.startsWith("!enable admin ") ||
-        lowerMsg === "!enable_admin" || lowerMsg.startsWith("!enable_admin ") ||
-        lowerMsg === "!enableadmin" || lowerMsg.startsWith("!enableadmin ") ||
-        lowerMsg === "!admin enable" || lowerMsg.startsWith("!admin enable ")
-      ) {
-        if (!isAllowedAdminUser(senderUsername)) return;
-        let targetRoomUid = roomUid;
-        const parts = message.trim().split(/\s+/);
-        if (parts.length > 2) {
-          targetRoomUid = parts.slice(2).join(" ").trim();
-        }
 
-        emitAdminControlForRoom(targetRoomUid, true);
-      } else if (
-        lowerMsg === "!disable admin" || lowerMsg.startsWith("!disable admin ") ||
-        lowerMsg === "!disable_admin" || lowerMsg.startsWith("!disable_admin ") ||
-        lowerMsg === "!disableadmin" || lowerMsg.startsWith("!disableadmin ") ||
-        lowerMsg === "!admin disable" || lowerMsg.startsWith("!admin disable ")
-      ) {
-        if (!isAllowedAdminUser(senderUsername)) return;
-        let targetRoomUid = roomUid;
-        const parts = message.trim().split(/\s+/);
-        if (parts.length > 2) {
-          targetRoomUid = parts.slice(2).join(" ").trim();
-        }
-
-        emitAdminControlForRoom(targetRoomUid, false);
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
         const isBotResponse = isBotUsername(senderUsername) ||
