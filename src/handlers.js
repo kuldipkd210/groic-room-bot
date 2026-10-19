@@ -642,21 +642,37 @@ function setupChatHandler(roomUid) {
       }
 
       // ─── User Status Commands ───────────────────────────────────────
-      if (lowerMsg === "!afk") {
+      if (lowerMsg === "!afk" || lowerMsg.startsWith("!afk ") || lowerMsg.startsWith("! afk")) {
         if (!isBotUsername(senderUsername)) {
-          userStatuses[senderUsername] = "AFK";
-          sendChatMessage(`@${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
+          let reason = "";
+          if (lowerMsg.startsWith("!afk ")) {
+            reason = message.slice("!afk ".length).trim();
+          } else if (lowerMsg.startsWith("! afk ")) {
+            reason = message.slice("! afk ".length).trim();
+          } else if (lowerMsg.startsWith("! afk")) {
+            reason = message.slice("! afk".length).trim();
+          }
+
+          reason = reason.replace(/^["']|["']$/g, "").trim();
+
+          userStatuses[senderUsername] = {
+            status: "AFK",
+            reason: reason
+          };
+
+          if (reason) {
+            sendChatMessage(`@${senderUsername} is now AFK 📵 "${reason}"\n(Use !status to view all user statuses)`, roomUid);
+          } else {
+            sendChatMessage(`@${senderUsername} is now AFK 📵\n(Use !status to view all user statuses)`, roomUid);
+          }
         }
         return;
-      } else if (lowerMsg === "!slp") {
+      } else if (lowerMsg === "!avl" || lowerMsg.startsWith("!avl") || lowerMsg.startsWith("! avl")) {
         if (!isBotUsername(senderUsername)) {
-          userStatuses[senderUsername] = "SLP";
-          sendChatMessage(`@${senderUsername} is now SLP 💤\n(Use !status to view all user statuses)`, roomUid);
-        }
-        return;
-      } else if (lowerMsg === "!avl") {
-        if (!isBotUsername(senderUsername)) {
-          userStatuses[senderUsername] = "AVL";
+          userStatuses[senderUsername] = {
+            status: "AVL",
+            reason: ""
+          };
           sendChatMessage(`@${senderUsername} is now AVL 🙋\n(Use !status to view all user statuses)`, roomUid);
         }
         return;
@@ -669,11 +685,14 @@ function setupChatHandler(roomUid) {
           } else {
             let reply = "User Statuses:";
             for (const u of users) {
-              const status = userStatuses[u];
-              let emoji = "🙋";
-              if (status === "AFK") emoji = "📵";
-              if (status === "SLP") emoji = "💤";
-              reply += `\n@${u} - ${status} ${emoji}`;
+              const info = getUserStatusObj(u);
+              if (info.status === "AFK" && info.reason) {
+                reply += `\n@${u} - AFK 📵 "${info.reason}"`;
+              } else if (info.status === "AFK") {
+                reply += `\n@${u} - AFK 📵`;
+              } else {
+                reply += `\n@${u} - AVL 🙋`;
+              }
             }
             sendChatMessage(reply, roomUid);
           }
@@ -697,11 +716,14 @@ function setupChatHandler(roomUid) {
             );
           }
           if (matchedUser) {
-            const status = userStatuses[matchedUser];
-            let emoji = "🙋";
-            if (status === "AFK") emoji = "📵";
-            if (status === "SLP") emoji = "💤";
-            sendChatMessage(`@${matchedUser} - ${status} ${emoji}`, roomUid);
+            const info = getUserStatusObj(matchedUser);
+            if (info.status === "AFK" && info.reason) {
+              sendChatMessage(`@${matchedUser} - AFK 📵 "${info.reason}"`, roomUid);
+            } else if (info.status === "AFK") {
+              sendChatMessage(`@${matchedUser} - AFK 📵`, roomUid);
+            } else {
+              sendChatMessage(`@${matchedUser} - AVL 🙋`, roomUid);
+            }
           } else {
             sendChatMessage(`@${target} is not in the room.`, roomUid);
           }
@@ -714,21 +736,20 @@ function setupChatHandler(roomUid) {
           "Available Public Commands:",
           "",
           "1. Set your status:",
-          "   > !afk — Away from keyboard 📵",
-          "   > !slp — Sleep 💤",
+          "   > !afk [reason] — Away from keyboard 📵",
           "   > !avl — Available 🙋",
           "",
           "2. !status [user] — View active statuses in the room.",
           "",
-          "3. !pick dj — Randomly pick a member to play the next song 🎧.",
+          "3. !pick dj — Randomly pick a member to play the next song.",
           "",
           "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "",
           "5. !ask <prompt> — Professional & informative AI answer.",
           "",
-          "6. !callowner / !kd — Send phone alert to the room owner 🔔.",
+          "6. !callowner / !kd — Send phone alert to the room owner.",
           "",
-          "7. !ded / !404 — Send phone alert to dedsec_404 🔔."
+          "7. !ded / !404 — Send phone alert to dedsec_404."
         ].join("\n");
         sendChatMessage(helpMessage, roomUid);
         return;
