@@ -61,12 +61,14 @@ function forceCloseSocket(socket) {
 }
 
 class DedicatedAccountPipeline {
-  constructor(accountIndex, roomUid, token, accountName, state) {
-    this.accountIndex = accountIndex;
+  constructor(pipelineIndex, totalPipelines, roomUid, token, accountName, state, interval = 120) {
+    this.pipelineIndex = pipelineIndex;
+    this.totalPipelines = totalPipelines;
     this.roomUid = roomUid;
     this.token = token;
     this.accountName = accountName;
     this.state = state;
+    this.interval = interval;
     this.socket = null;
     this.sendTimer = null;
     this.syncTimer = null;
@@ -89,11 +91,19 @@ class DedicatedAccountPipeline {
       this.startSync();
     });
 
-    this.socket.on("disconnect", () => {
+    this.socket.on("disconnect", (reason) => {
       this.stopTimers();
+      // Socket.IO does not auto-reconnect on server disconnect
+      if (reason === "io server disconnect") {
+        setTimeout(() => {
+          if (this.state.isRunning && this.socket) this.socket.connect();
+        }, 1000);
+      }
     });
 
-    this.socket.on("connect_error", () => {});
+    this.socket.on("connect_error", () => {
+      // Automatic reconnection will handle retry
+    });
   }
 
   startSync() {
@@ -108,9 +118,7 @@ class DedicatedAccountPipeline {
   startContinuousLoop() {
     if (this.sendTimer) clearTimeout(this.sendTimer);
 
-    // Each account dispatches at 520ms (~1.9 msgs/sec per account)
-    // All accounts run simultaneously on their own independent timers
-    const interval = 520;
+    const interval = this.interval;
 
     const fireTick = () => {
       if (!this.state.isRunning) return;
@@ -122,18 +130,18 @@ class DedicatedAccountPipeline {
           roomUid: this.roomUid
         });
         this.accountMsgs++;
-        this.state.accountCounts[this.accountIndex] = this.accountMsgs;
+        this.state.accountCounts[this.pipelineIndex] = this.accountMsgs;
         this.state.totalMessages++;
         this.state.triggerLogUpdate();
       }
 
-      const jitter = (Math.random() * 0.15 - 0.075) * interval;
-      const nextDelay = Math.max(450, interval + jitter);
+      const jitter = (Math.random() * 0.1 - 0.05) * interval;
+      const nextDelay = Math.max(20, Math.round(interval + jitter));
 
       this.sendTimer = setTimeout(fireTick, nextDelay);
     };
 
-    const initialOffset = this.accountIndex * 150;
+    const initialOffset = Math.round((this.pipelineIndex * interval) / Math.max(1, this.totalPipelines));
     this.sendTimer = setTimeout(fireTick, initialOffset);
   }
 
@@ -155,19 +163,14 @@ async function fetchLeaderboardStats(roomUid) {
   try {
     const details = await getRoomDetails(roomUid);
     const rooms = await getActivePublicRooms();
-    rooms.sort((a, b) => (b.engagementScore || 0) - (a.engagementScore || 0));
-    
-    const myRank = rooms.findIndex(r => r.roomUid === roomUid) + 1;
-    const nextRoom = myRank > 1 ? rooms[myRank - 2] : null;
+    const myPos = rooms.findIndex(r => r.roomUid === roomUid) + 1;
 
     return {
-      score: details?.engagementScore || 0,
-      msgs: details?.messagesSent || 0,
-      joins: details?.joinCount || 0,
-      rank: myRank > 0 ? myRank : "-",
-      totalRooms: rooms.length,
-      nextRoomName: nextRoom ? (nextRoom.roomName || nextRoom.username) : "None (Rank #1)",
-      nextRoomScore: nextRoom ? (nextRoom.engagementScore || 0) : null
+      roomName: details?.roomName || "Current Room",
+      activeUsersCount: details?.activeUsers?.length || 0,
+      activeUsers: details?.activeUsers || [],
+      position: myPos > 0 ? myPos : "-",
+      totalRooms: rooms.length
     };
   } catch (err) {
     return null;
@@ -182,9 +185,9 @@ async function startEngagementBooster(options = {}) {
   }
 
   console.log("==========================================================");
-  console.log("🚀 GROIC CONCURRENT MULTI-ACCOUNT ENGAGEMENT CANNON 🚀");
+  console.log("🚀 GROIC HIGH-SPEED MULTI-ACCOUNT ENGAGEMENT CANNON 🚀");
   console.log("==========================================================");
-  console.log("Authenticating all accounts & fetching live stats...");
+  console.log("Authenticating all accounts & connecting to room...");
 
   await refreshAccessToken();
   const allTokens = getAllTokens();
@@ -195,80 +198,88 @@ async function startEngagementBooster(options = {}) {
     : allTokens;
 
   const initStats = await fetchLeaderboardStats(roomUid);
-  const baseScore = initStats ? initStats.score : 0;
-  const baseRank = initStats ? initStats.rank : "-";
-  const totalRooms = initStats ? initStats.totalRooms : "-";
+  const roomTitle = initStats?.roomName || "Groic Room";
+  const initialUsers = initStats?.activeUsersCount || 0;
 
-  console.log(`🎯 Target Room UID     : ${roomUid}`);
-  console.log(`📊 Official DB Score   : ${baseScore.toLocaleString()} pts (Rank #${baseRank} / ${totalRooms})`);
-  if (initStats && initStats.nextRoomName) {
-    const ptsNeeded = Math.max(0, initStats.nextRoomScore - baseScore);
-    console.log(`🎯 Next To Overtake    : "${initStats.nextRoomName}" (#${baseRank - 1}) -> ${ptsNeeded.toLocaleString()} pts needed`);
+  const targetRate = options.targetRate || (options.interval ? Math.round(1000 / options.interval * targetTokens.length) : 22);
+  const channelsPerAccount = Math.max(1, parseInt(options.channels || options.clients || 1, 10));
+  const totalPipelines = targetTokens.length * channelsPerAccount;
+
+  let effectiveInterval = Math.max(25, Math.round((1000 * totalPipelines) / targetRate));
+  if (options.interval && !options.targetRate) {
+    effectiveInterval = Math.max(25, options.interval);
   }
-  console.log(`🔑 Simultaneous Accs   : ${targetTokens.length} active registered Groic account(s)`);
-  console.log(`⚡ Verified Ingestion  : ~${(targetTokens.length * 340).toLocaleString()} to ${(targetTokens.length * 380).toLocaleString()} pts/min (~${(targetTokens.length * 22000).toLocaleString()} pts/hour)`);
+
+  const estRate = ((1000 / effectiveInterval) * totalPipelines).toFixed(1);
+
+  console.log(`🎯 Target Room UID     : ${roomUid} ("${roomTitle}")`);
+  console.log(`👥 Active In Room      : ${initialUsers} user(s) currently connected`);
+  console.log(`🔑 Active Accounts     : ${targetTokens.length} registered Groic account(s)`);
+  console.log(`📡 Socket Pipelines    : ${totalPipelines} active parallel stream(s)`);
+  console.log(`⚡ Target Fire Rate    : ~${estRate} msgs/sec (~${Math.round(estRate * 60).toLocaleString()} msgs/min)`);
   console.log(`🔒 Zero-Ghost Policy   : 100% clean socket purge on Ctrl+C`);
   console.log("==========================================================");
 
   let lastLogTime = 0;
   const accountNames = targetTokens.map((token, i) => {
-    const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
-    return (decoded.name || `User_${i + 1}`).split(' ')[0];
+    try {
+      const decoded = JSON.parse(Buffer.from(token.split('.')[1], 'base64').toString('utf8'));
+      return (decoded.name || `User_${i + 1}`).split(' ')[0];
+    } catch (_) {
+      return `User_${i + 1}`;
+    }
   });
 
   const state = {
     isRunning: true,
     totalMessages: 0,
     startTime: Date.now(),
-    liveScore: baseScore,
-    currentRank: baseRank,
-    nextTargetName: initStats?.nextRoomName,
-    nextTargetScore: initStats?.nextRoomScore,
-    accountCounts: targetTokens.map(() => 0),
+    liveUsers: initialUsers,
+    accountCounts: new Array(totalPipelines).fill(0),
     triggerLogUpdate: () => {
       const now = Date.now();
-      if (now - lastLogTime < 300) return;
+      if (now - lastLogTime < 180) return;
       lastLogTime = now;
 
       const elapsedSec = Math.max(1, Math.round((now - state.startTime) / 1000));
       const msgRate = (state.totalMessages / elapsedSec).toFixed(1);
 
-      let nextStr = "";
-      if (state.nextTargetScore) {
-        const gap = state.nextTargetScore - state.liveScore;
-        nextStr = gap > 0 ? ` | 🎯 #${state.currentRank - 1} in ${gap.toLocaleString()} pts` : ` | 👑 OVERTAKING #${state.currentRank - 1}!`;
+      // Aggregate counts by account name
+      const perAccCounts = {};
+      accountNames.forEach(name => { perAccCounts[name] = 0; });
+      for (let p = 0; p < totalPipelines; p++) {
+        const accIdx = p % targetTokens.length;
+        const name = accountNames[accIdx];
+        perAccCounts[name] = (perAccCounts[name] || 0) + state.accountCounts[p];
       }
 
-      // Display live per-account counts proving 100% parallel execution
-      const accStatsStr = targetTokens.map((_, i) => `${accountNames[i]}: ${state.accountCounts[i]}`).join(' | ');
-
-      console.log(`[⚡ ${msgRate} msg/s] [💬 ${accStatsStr}] [📈 Live: ${state.liveScore.toLocaleString()} | 🏆 Rank: #${state.currentRank}${nextStr}]`);
+      const accStatsStr = Object.entries(perAccCounts).map(([name, count]) => `${name}: ${count}`).join(' | ');
+      console.log(`[⚡ ${msgRate} msg/s] [💬 ${accStatsStr}] [👥 In Room: ${state.liveUsers} | 📨 Total: ${state.totalMessages.toLocaleString()}]`);
     }
   };
 
-  // Official MongoDB poll every 10 seconds
-  const dbSyncTimer = setInterval(async () => {
+  // Poll room active users periodically
+  const roomSyncTimer = setInterval(async () => {
     if (!state.isRunning) return;
     const latest = await fetchLeaderboardStats(roomUid);
-    if (latest && latest.score > 0) {
-      state.liveScore = latest.score;
-      state.currentRank = latest.rank;
-      state.nextTargetName = latest.nextRoomName;
-      state.nextTargetScore = latest.nextRoomScore;
-      const netGain = latest.score - baseScore;
-      const elapsedMin = ((Date.now() - state.startTime) / 60000).toFixed(1);
-      console.log(`\n>>> 🟢 [GROIC MONGODB CONFIRMED] Official Score: ${latest.score.toLocaleString()} pts (Rank #${latest.rank} | +${netGain.toLocaleString()} pts in ${elapsedMin}m) <<<\n`);
+    if (latest) {
+      state.liveUsers = latest.activeUsersCount;
     }
-  }, 10000);
+  }, 12000);
 
-  // Spawn 1 dedicated continuous pipeline per account
+  // Spawn dedicated continuous pipelines
   const pipelines = [];
-  targetTokens.forEach((token, accIdx) => {
-    const accName = accountNames[accIdx];
-    const pipeline = new DedicatedAccountPipeline(accIdx, roomUid, token, accName, state);
-    pipelines.push(pipeline);
-    pipeline.start();
-  });
+  let pipelineIdx = 0;
+  for (let ch = 0; ch < channelsPerAccount; ch++) {
+    for (let accIdx = 0; accIdx < targetTokens.length; accIdx++) {
+      const token = targetTokens[accIdx];
+      const accName = accountNames[accIdx];
+      const pipeline = new DedicatedAccountPipeline(pipelineIdx, totalPipelines, roomUid, token, accName, state, effectiveInterval);
+      pipelines.push(pipeline);
+      pipeline.start();
+      pipelineIdx++;
+    }
+  }
 
   // Background token refresh loop every 45 mins
   const tokenRefreshTimer = setInterval(async () => {
@@ -285,7 +296,7 @@ async function startEngagementBooster(options = {}) {
     console.log("\n[Cleanup] Stopping Booster and purging all socket channels...");
     state.isRunning = false;
     clearInterval(tokenRefreshTimer);
-    clearInterval(dbSyncTimer);
+    clearInterval(roomSyncTimer);
 
     pipelines.forEach(p => p.stop());
     for (const socket of Array.from(activeSockets)) {
@@ -295,19 +306,27 @@ async function startEngagementBooster(options = {}) {
 
     await sleep(400);
 
-    console.log("Fetching final official score from Groic database...");
-    const finalStats = await fetchLeaderboardStats(roomUid);
-    const finalScore = finalStats ? finalStats.score : state.liveScore;
-    const finalRank = finalStats ? finalStats.rank : state.currentRank;
-    const netGained = finalScore - baseScore;
-    const totalSec = Math.round((Date.now() - state.startTime) / 1000);
+    const totalSec = Math.max(1, Math.round((Date.now() - state.startTime) / 1000));
+    const finalRate = (state.totalMessages / totalSec).toFixed(1);
+
+    const perAccCounts = {};
+    accountNames.forEach(name => { perAccCounts[name] = 0; });
+    for (let p = 0; p < totalPipelines; p++) {
+      const accIdx = p % targetTokens.length;
+      const name = accountNames[accIdx];
+      perAccCounts[name] = (perAccCounts[name] || 0) + state.accountCounts[p];
+    }
 
     console.log("==========================================================");
     console.log("🏁 ENGAGEMENT BOOSTER SUMMARY:");
     console.log(`Active Duration        : ${totalSec}s`);
-    console.log(`Starting Score         : ${baseScore.toLocaleString()} pts (Rank #${baseRank})`);
-    console.log(`Final Confirmed Score  : ${finalScore.toLocaleString()} pts (Rank #${finalRank})`);
-    console.log(`Net Official Gain      : +${netGained.toLocaleString()} Points! 🚀`);
+    console.log(`Total Messages Blasted : ${state.totalMessages.toLocaleString()} msgs`);
+    console.log(`Average Fire Rate      : ${finalRate} msgs/sec 🚀`);
+    console.log("----------------------------------------------------------");
+    Object.entries(perAccCounts).forEach(([name, count]) => {
+      console.log(`  • ${name.padEnd(20)} : ${count.toLocaleString()} msgs`);
+    });
+    console.log("----------------------------------------------------------");
     console.log(`Ghost Connections Left : 0 (Cleaned up completely)`);
     console.log("==========================================================");
     process.exit(0);
