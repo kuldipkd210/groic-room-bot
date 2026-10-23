@@ -6,6 +6,7 @@ const { sleep } = require("./helpers");
 const { BOT_NAME, BOT_IMAGE_URL } = require("../config/constants");
 const { ROOM_UID: ENV_ROOM_UID } = require("../config/env");
 const { startUserJoinWatcher, startKeepAlive, stopHandlers, setupChatHandler } = require("./handlers");
+const player = require("./services/player");
 
 let currentRoomUid = null;
 let botStarted = false;
@@ -24,6 +25,7 @@ function cleanupRuntime() {
     socket.removeAllListeners();
     socket.disconnect();
   }
+  player.stop();
   stopHandlers();
   botStarted = false;
 }

@@ -25,7 +25,13 @@ async function refreshSingleToken(refreshToken) {
     return res.data.id_token || res.data.access_token;
   } catch (err) {
     if (err.response && err.response.data) {
-      console.error("Firebase refreshSingleToken error:", JSON.stringify(err.response.data));
+      const errMsg = err.response.data?.error?.message;
+      if (errMsg === "USER_NOT_FOUND" || errMsg === "TOKEN_EXPIRED") {
+        console.error(`❌ [Auth Error] Your REFRESH_TOKEN in .env is invalid or expired (${errMsg}).`);
+        console.error("👉 Please log into https://groic.in, grab your new Firebase refreshToken from DevTools (Application > IndexedDB/LocalStorage), and update REFRESH_TOKEN in .env.");
+      } else {
+        console.error("Firebase refreshSingleToken error:", JSON.stringify(err.response.data));
+      }
     }
     throw err;
   }

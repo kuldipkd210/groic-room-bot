@@ -6,6 +6,8 @@ const { getToken } = require("./auth");
 const { sendOwnerNotification, sendUserNotification } = require("./notifier");
 const fs = require("fs");
 const path = require("path");
+const player = require("./services/player");
+const { findPlaylist, formatPlaylistList, addSavedPlaylist, removeSavedPlaylist, syncPlaylistsFromCloud } = require("./services/playlists");
 
 const ALLOWED_ADMINS_FILE = path.join(__dirname, "../allowed_admins.json");
 
@@ -567,7 +569,10 @@ function stopHandlers() {
   if (socket) {
     socket.off("chat");
     socket.off("presenceUpdate");
+    socket.off("playbackUpdate");
   }
+
+  player.stop();
 
   knownUsers.clear();
   initialized = false;
@@ -587,11 +592,20 @@ function stopHandlers() {
 
 function setupChatHandler(roomUid) {
   activeRoomUid = roomUid;
-  // Sync allowed admins from cloud
+  player.setRoomUid(roomUid);
+  player.setChatNotifier(sendChatMessage);
+
+  // Sync allowed admins and playlists from cloud
   syncAllowedAdminsFromCloud(roomUid);
+  syncPlaylistsFromCloud();
 
   const socket = getSocket();
   if (socket) {
+    socket.off("playbackUpdate");
+    socket.on("playbackUpdate", (data) => {
+      player.handlePlaybackUpdate(data);
+    });
+
     socket.off("chat"); // remove old listener before re-adding (prevents duplicates on reconnect)
     socket.on("chat", async (data) => {
       console.log("=== RECEIVED CHAT EVENT ===");
@@ -739,15 +753,17 @@ function setupChatHandler(roomUid) {
           "",
           "2. !status — View all members' status with reasons.",
           "",
-          "3. !pick dj — Randomly pick a member to play the next song.",
+          "3. !lists — Access saved playlists & music commands.",
           "",
-          "4. !xai <prompt> — Witty, funny & sarcastic AI companion.",
+          "4. !pick dj — Randomly pick a member to play the next song.",
           "",
-          "5. !ask <prompt> — Professional & informative AI answer.",
+          "5. !xai <prompt> — Witty, funny & sarcastic AI companion.",
           "",
-          "6. !callowner / !kd — Send phone alert to the room owner.",
+          "6. !ask <prompt> — Professional & informative AI answer.",
           "",
-          "7. !ded / !404 — Send phone alert to dedsec_404."
+          "7. !callowner / !kd — Send phone alert to the room owner.",
+          "",
+          "8. !ded / !404 — Send phone alert to dedsec_404."
         ].join("\n");
         sendChatMessage(helpMessage, roomUid);
         return;
@@ -870,6 +886,129 @@ function setupChatHandler(roomUid) {
         } else {
           const picked = candidates[Math.floor(Math.random() * candidates.length)];
           sendChatMessage(`🎵 @${picked} is chosen to play the next song! 🎧 Pick a track! 🎶`, roomUid);
+        }
+        return;
+      }
+
+      // ─── Music & Spotify Commands ──────────────────────────────────────────
+      const normalizedCmd = lowerMsg.replace(/^!\s*/, "!");
+
+      if (normalizedCmd === "!lists" || normalizedCmd === "!playlists" || normalizedCmd === "!playlist list" || normalizedCmd === "!spotify list") {
+        sendChatMessage(formatPlaylistList(), roomUid);
+        return;
+      }
+
+      if (normalizedCmd.startsWith("!addlist ") || normalizedCmd.startsWith("!addplaylist ") || normalizedCmd.startsWith("!saveplaylist ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`@${senderUsername} only admins can add saved playlists.`, roomUid);
+          return;
+        }
+        let rest = "";
+        if (normalizedCmd.startsWith("!addlist ")) rest = message.slice("!addlist ".length).trim();
+        else if (normalizedCmd.startsWith("!addplaylist ")) rest = message.slice("!addplaylist ".length).trim();
+        else rest = message.slice("!saveplaylist ".length).trim();
+
+        const parts = rest.split(/\s+/);
+        if (parts.length < 2) {
+          sendChatMessage(`Usage: !addlist <name> <spotify_url>`, roomUid);
+          return;
+        }
+        const shortName = parts[0];
+        const playlistUrl = parts[1];
+
+        const { getSpotifyTracks } = require("./services/spotify");
+        sendChatMessage(`⏳ Fetching details for playlist "${shortName}"...`, roomUid);
+        try {
+          const info = await getSpotifyTracks(playlistUrl);
+          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          sendChatMessage(
+            `✅ Saved "${saved.name}" (${info.trackCount} tracks)!\nSynced to cloud JSONBlob. Play with: !load ${saved.name}`,
+            roomUid
+          );
+        } catch (err) {
+          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          sendChatMessage(
+            `✅ Saved playlist "${saved.name}"!\nSynced to cloud JSONBlob. Play with: !load ${saved.name}`,
+            roomUid
+          );
+        }
+        return;
+      }
+
+      if (normalizedCmd.startsWith("!delist ") || normalizedCmd.startsWith("!delplaylist ") || normalizedCmd.startsWith("!deleteplaylist ") || normalizedCmd.startsWith("!removeplaylist ")) {
+        if (!isAllowedAdminUser(senderUsername)) {
+          sendChatMessage(`@${senderUsername} only admins can delete saved playlists.`, roomUid);
+          return;
+        }
+        let targetName = "";
+        if (normalizedCmd.startsWith("!delist ")) targetName = message.slice("!delist ".length).trim();
+        else if (normalizedCmd.startsWith("!delplaylist ")) targetName = message.slice("!delplaylist ".length).trim();
+        else if (normalizedCmd.startsWith("!deleteplaylist ")) targetName = message.slice("!deleteplaylist ".length).trim();
+        else targetName = message.slice("!removeplaylist ".length).trim();
+
+        if (!targetName) {
+          sendChatMessage(`Usage: !delist <name>`, roomUid);
+          return;
+        }
+
+        const removed = await removeSavedPlaylist(targetName);
+        if (removed) {
+          sendChatMessage(`🗑️ Removed playlist "${removed.name}". Synced to cloud JSONBlob.`, roomUid);
+        } else {
+          sendChatMessage(`@${senderUsername} playlist "${targetName}" was not found in saved playlists.`, roomUid);
+        }
+        return;
+      }
+
+      if (
+        normalizedCmd.startsWith("!load") ||
+        normalizedCmd.startsWith("!playlist") ||
+        normalizedCmd.startsWith("!spotify")
+      ) {
+        let prefix = "!load";
+        if (normalizedCmd.startsWith("!playlist")) prefix = "!playlist";
+        else if (normalizedCmd.startsWith("!spotify")) prefix = "!spotify";
+        const arg = message.slice(message.toLowerCase().indexOf(prefix) + prefix.length).trim();
+
+        if (!arg || arg.toLowerCase() === "list") {
+          sendChatMessage(formatPlaylistList(), roomUid);
+          return;
+        }
+
+        const found = findPlaylist(arg);
+        if (found && found.isUrl) {
+          sendChatMessage(
+            `@${senderUsername} Direct URLs are disabled. Please save it to playlists.json first:\n> !addlist <name> ${found.url}\nThen play with: !load <name>`,
+            roomUid
+          );
+          return;
+        }
+
+        if (!found) {
+          sendChatMessage(
+            `@${senderUsername} playlist "${arg}" is not saved in playlists.json.\n\n${formatPlaylistList()}`,
+            roomUid
+          );
+          return;
+        }
+
+        const targetUrl = found.url;
+        const targetDisplayName = found.name;
+
+        sendChatMessage(`⏳ Loading saved playlist "${targetDisplayName}"...`, roomUid);
+        try {
+          const current = await player.loadSpotifyPlaylist(targetUrl, { autoPlay: true });
+          if (current) {
+            sendChatMessage(
+              `🎵 Connected to "${player.playlistName}" (${player.playlist.length} tracks)!\n▶️ Now playing: "${current.title}" by ${current.artist} 🎧`,
+              roomUid
+            );
+          } else {
+            sendChatMessage(`🎵 Loaded "${player.playlistName}" (${player.playlist.length} tracks).`, roomUid);
+          }
+        } catch (err) {
+          console.error("[Handlers] Spotify playlist error:", err.message);
+          sendChatMessage(`❌ Could not load playlist: ${err.message}`, roomUid);
         }
         return;
       }
