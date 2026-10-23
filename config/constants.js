@@ -29,5 +29,17 @@ module.exports = {
       triggers: []
     }
   ],
-  NOTIFY_COOLDOWN_MS: 60000 // 1 minute (60 seconds) between phone alerts
+  NOTIFY_COOLDOWN_MS: 60000, // 1 minute (60 seconds) between phone alerts
+
+  // Spotify default playlist (can also be set via SPOTIFY_PLAYLIST_URL in .env)
+  DEFAULT_SPOTIFY_PLAYLIST:
+    process.env.SPOTIFY_PLAYLIST_URL ||
+    "https://open.spotify.com/playlist/4PzvrgzKxotDakMn5v4QCG?si=n8syYPnDQFCZI1CyrS1JrQ",
+
+  // Hardcoded default playlists
+  DEFAULT_PLAYLISTS: {
+    soft: "https://open.spotify.com/playlist/4PzvrgzKxotDakMn5v4QCG?si=n8syYPnDQFCZI1CyrS1JrQ",
+    v2: "https://open.spotify.com/playlist/57R2ymQ9Ulb3c7AR92XBvk?si=E132XELtT_qyU5M3ogp1QA"
+  }
 };
+
