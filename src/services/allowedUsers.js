@@ -111,13 +111,16 @@ function saveAllowedUsersLocally(list) {
  * Syncs allowed users from cloud JSONBlob (identically to allowed_admins).
  */
 async function syncAllowedUsersFromCloud(roomUid) {
-  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID;
+  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID || process.env.AUTH_USERS_BLOB_ID || process.env.ALLOWED_USER_BLOB_ID;
   if (envBlobId) {
     console.log(`[AllowedUsers] Syncing allowed users using env blob ID: ${envBlobId}`);
     try {
       const agent = getProxyAgent();
       const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, {
-        headers: { Accept: "application/json" },
+        headers: {
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
         ...(agent ? { httpsAgent: agent } : {}),
         timeout: 10000
       });
@@ -197,12 +200,16 @@ async function saveAllowedUsersAndSync(list, roomUid) {
     users: allowedUsersCache
   };
 
-  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID;
+  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID || process.env.AUTH_USERS_BLOB_ID || process.env.ALLOWED_USER_BLOB_ID;
   if (envBlobId) {
     try {
       const agent = getProxyAgent();
       await axios.put(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, payloadData, {
-        headers: { "Content-Type": "application/json", Accept: "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          Accept: "application/json",
+          "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        },
         ...(agent ? { httpsAgent: agent } : {}),
         timeout: 10000
       });
@@ -327,7 +334,8 @@ function setRoomLocked(locked, roomUid) {
     console.error("[AllowedUsers] Failed to save room_lock.json:", err.message);
   }
 
-  if (roomUid) {
+  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID || process.env.AUTH_USERS_BLOB_ID || process.env.ALLOWED_USER_BLOB_ID;
+  if (roomUid || envBlobId) {
     saveAllowedUsersAndSync(loadAllowedUsers(), roomUid).catch(() => {});
   }
 }

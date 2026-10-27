@@ -29,7 +29,7 @@ function handleUnauthorizedJoin(username, roomUid) {
   if (pendingLockEjections.has(clean)) return;
 
   sendChatMessage(
-    `@${username} room is locked for now, you will be auto kicked in 5 second but dont worry you can join later sorry for the inconvient`,
+    `@${username}, This Room is locked for now ,\nyou'll be auto kick in 5 sec but dont worry you can join later ,\nsorry for inconvinet`,
     roomUid
   );
 
@@ -290,6 +290,8 @@ async function saveAllowedAdminsAndSync(list, roomUid) {
 
 let keepAliveInterval = null;
 let knownUsers = new Set();
+const userWelcomeTimestamps = new Map();
+const WELCOME_COOLDOWN_MS = 90 * 1000; // 1 minute 30 seconds
 let initialized = false; // true after first presenceUpdate processed
 let botJoinedOnce = false; // true after bot is found in active users at least once
 let chatHistory = []; // Stores rolling { username, message } recent messages
@@ -697,7 +699,7 @@ function setupChatHandler(roomUid) {
           })
             .then((sent) => {
               if (sent && isExplicitCmd) {
-                sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner! 🔔`, roomUid);
+                sendChatMessage(`@${senderUsername}, I've sent a phone notification to the owner!`, roomUid);
               }
             })
             .catch((err) => console.error("Notification trigger error:", err));
@@ -720,7 +722,7 @@ function setupChatHandler(roomUid) {
             })
               .then((sent) => {
                 if (sent) {
-                  sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}! 🔔`, roomUid);
+                  sendChatMessage(`@${senderUsername}, I've sent a phone notification to ${friend.username}!`, roomUid);
                 }
               })
               .catch((err) => console.error("Friend notification trigger error:", err));
@@ -808,7 +810,7 @@ function setupChatHandler(roomUid) {
           "",
           "2. !status — View all members' status with reasons.",
           "",
-          "3. !mhelp — Access music & playlist commands 🎵",
+          "3. !mhelp — Access music & playlist commands.",
           "",
           "4. !pick dj — Randomly pick a member to play the next song.",
           "",
@@ -826,11 +828,16 @@ function setupChatHandler(roomUid) {
 
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!mhelp") {
         const mhelpMessage = [
-          "🎵 Music & Playlist Commands:",
+          "Music & Playlist Commands:",
+          "",
           "• !lists — View all saved playlists.",
-          "• !load <name> — Shuffles & plays a saved playlist 🔀",
-          "• !shuffle — Shuffle upcoming tracks in current queue 🔀",
+          "",
+          "• !load <name> — Shuffles and plays a saved playlist.",
+          "",
+          "• !shuffle — Shuffle upcoming tracks in current queue.",
+          "",
           "• !addlist <name> <spotify_url> — Save a playlist.",
+          "",
           "• !delist <name> — Delete a saved playlist."
         ].join("\n");
         sendChatMessage(mhelpMessage, roomUid);
@@ -844,22 +851,30 @@ function setupChatHandler(roomUid) {
         }
 
         const ahelpMessage = [
-          "🛡️ Admin Commands:",
-          "• !look <user> — Find which public room a user is in.",
-          "• !admin [user] — Grant admin to user in this room.",
-          "• !unadmin [user] — Revoke admin from user in this room.",
-          "• !admin room <roomUid> [user] — Remote room admin.",
-          "• !unadmin room <roomUid> [user] — Remote room unadmin.",
-          "• !kick <user> — Kick a user from this room.",
-          "• !unkick <user> — Unkick a user in this room.",
-          "• !klist [roomUid] — View kicked users list.",
-          "• !lock — Lock room (auto-kicks unauthorized joiners).",
-          "• !unlock — Unlock room for everyone.",
-          "• !a_users — View authorized users list.",
-          "• !a_user <user> — Authorize user for locked room.",
-          "• !un_user <user> — Remove user from authorized list.",
-          "• !kick room <roomUid> <user> — Kick a user in a remote room.",
-          "• !unkick room <roomUid> <user> — Unkick a user in a remote room."
+          "Admin Commands:",
+          "",
+          "1. Room Moderation:",
+          "   • !admin [user] — Grant admin in this room.",
+          "   • !unadmin [user] — Revoke admin in this room.",
+          "   • !look <user> — Find which public room a user is in.",
+          "",
+          "2. Kick Commands:",
+          "   • !kick <user> — Kick a user from this room.",
+          "   • !unkick <user> — Unkick a user in this room.",
+          "   • !klist [roomUid] — View kicked users list.",
+          "",
+          "3. Room Lockdown:",
+          "   • !lock — Lock room (auto-kicks unauthorized joiners).",
+          "   • !unlock — Unlock room for everyone.",
+          "   • !a_users — View authorized users list.",
+          "   • !a_user <user> — Authorize user for locked room.",
+          "   • !un_user <user> — Remove user from authorized list.",
+          "",
+          "4. Remote Room Controls:",
+          "   • !admin room <roomUid> [user] — Remote room admin.",
+          "   • !unadmin room <roomUid> [user] — Remote room unadmin.",
+          "   • !kick room <roomUid> <user> — Kick in remote room.",
+          "   • !unkick room <roomUid> <user> — Unkick in remote room."
         ].join("\n");
 
         sendChatMessage(ahelpMessage, roomUid);
@@ -872,11 +887,16 @@ function setupChatHandler(roomUid) {
         }
 
         const ohelpMessage = [
-          "👑 Owner-Only Commands:",
+          "Owner-Only Commands:",
+          "",
           "• !allow <user> — Add a user to allowed admins list.",
+          "",
           "• !revoke <user> — Remove a user from allowed admins list.",
+          "",
           "• !allowed — View all allowed admin users.",
+          "",
           "• !kick_all rooms <user> — Sweep & kick user across ALL public rooms.",
+          "",
           "• !unkick_all rooms <user> — Sweep & unkick user across ALL public rooms."
         ].join("\n");
 
@@ -967,10 +987,10 @@ function setupChatHandler(roomUid) {
         const candidates = usersArray.filter(u => u.toLowerCase() !== senderUsername.toLowerCase());
 
         if (candidates.length === 0) {
-          sendChatMessage(`🎵 @${senderUsername} you're the DJ! Pick the next song! 🎧`, roomUid);
+          sendChatMessage(`@${senderUsername} you're the DJ! Pick the next song!`, roomUid);
         } else {
           const picked = candidates[Math.floor(Math.random() * candidates.length)];
-          sendChatMessage(`🎵 @${picked} is chosen to play the next song! 🎧 Pick a track! 🎶`, roomUid);
+          sendChatMessage(`@${picked} is chosen to play the next song! Pick a track!`, roomUid);
         }
         return;
       }
@@ -1002,18 +1022,18 @@ function setupChatHandler(roomUid) {
         const playlistUrl = parts[1];
 
         const { getSpotifyTracks } = require("./services/spotify");
-        sendChatMessage(`⏳ Fetching details for playlist "${shortName}"...`, roomUid);
+        sendChatMessage(`Fetching details for playlist "${shortName}"...`, roomUid);
         try {
           const info = await getSpotifyTracks(playlistUrl);
           const saved = await addSavedPlaylist(shortName, playlistUrl);
           sendChatMessage(
-            `✅ Saved "${saved.name}" (${info.trackCount} tracks)!\nSynced to cloud JSONBlob. Play with: !load ${saved.name}`,
+            `Saved "${saved.name}" (${info.trackCount} tracks)!\nSynced to cloud . Play with: !load ${saved.name}`,
             roomUid
           );
         } catch (err) {
           const saved = await addSavedPlaylist(shortName, playlistUrl);
           sendChatMessage(
-            `✅ Saved playlist "${saved.name}"!\nSynced to cloud JSONBlob. Play with: !load ${saved.name}`,
+            `Saved playlist "${saved.name}"!\n. Play with: !load ${saved.name}`,
             roomUid
           );
         }
@@ -1038,7 +1058,7 @@ function setupChatHandler(roomUid) {
 
         const removed = await removeSavedPlaylist(targetName);
         if (removed) {
-          sendChatMessage(`🗑️ Removed playlist "${removed.name}". Synced to cloud JSONBlob.`, roomUid);
+          sendChatMessage(`Removed playlist "${removed.name}".`, roomUid);
         } else {
           sendChatMessage(`@${senderUsername} playlist "${targetName}" was not found in saved playlists.`, roomUid);
         }
@@ -1080,20 +1100,20 @@ function setupChatHandler(roomUid) {
         const targetUrl = found.url;
         const targetDisplayName = found.name;
 
-        sendChatMessage(`⏳ Shuffling & loading saved playlist "${targetDisplayName}"... 🔀`, roomUid);
+        sendChatMessage(`Shuffling & loading saved playlist "${targetDisplayName}"...`, roomUid);
         try {
           const current = await player.loadSpotifyPlaylist(targetUrl, { autoPlay: true, shuffle: true });
           if (current) {
             sendChatMessage(
-              `🔀 Shuffled & loaded "${player.playlistName}" (${player.playlist.length} tracks)!\n▶️ Now playing: "${current.title}" by ${current.artist} 🎧`,
+              `Shuffled & loaded "${player.playlistName}" (${player.playlist.length} tracks)!\nNow playing: "${current.title}" by ${current.artist}`,
               roomUid
             );
           } else {
-            sendChatMessage(`🔀 Shuffled & loaded "${player.playlistName}" (${player.playlist.length} tracks).`, roomUid);
+            sendChatMessage(`Shuffled & loaded "${player.playlistName}" (${player.playlist.length} tracks).`, roomUid);
           }
         } catch (err) {
           console.error("[Handlers] Spotify playlist error:", err.message);
-          sendChatMessage(`❌ Could not load playlist: ${err.message}`, roomUid);
+          sendChatMessage(`Could not load playlist: ${err.message}`, roomUid);
         }
         return;
       }
@@ -1105,7 +1125,7 @@ function setupChatHandler(roomUid) {
         }
         const ok = player.shuffle();
         if (ok) {
-          sendChatMessage("🔀 Upcoming playlist queue has been shuffled!", roomUid);
+          sendChatMessage("Upcoming playlist queue has been shuffled.", roomUid);
         } else {
           sendChatMessage("No active playlist queue to shuffle.", roomUid);
         }
@@ -1120,7 +1140,7 @@ function setupChatHandler(roomUid) {
         if (!arg) {
           sendChatMessage(`Please provide a question or prompt after ${cmdName.trim()}.`, roomUid);
         } else {
-          sendChatMessage(`⏳ Thinking...`, roomUid);
+          sendChatMessage("Thinking...", roomUid);
           const answer = await askAi(arg, isXai ? "xai" : "ask", roomUid, senderUsername);
           if (answer) {
             sendChatMessage(answer, roomUid);
@@ -1300,11 +1320,11 @@ function setupChatHandler(roomUid) {
 
           const kicked = details.kicked || [];
           if (kicked.length === 0) {
-            sendChatMessage(`🚫 Kicked List (${details.roomName || targetRoomUid}): No users currently kicked.`, roomUid);
+            sendChatMessage(`Kicked List (${details.roomName || targetRoomUid}): No users currently kicked.`, roomUid);
           } else {
             const listStr = kicked.slice(0, 30).map((u, i) => `${i + 1}. ${u}`).join("\n");
             const more = kicked.length > 30 ? `\n...and ${kicked.length - 30} more` : "";
-            sendChatMessage(`🚫 Kicked Users in ${details.roomName || targetRoomUid} [${kicked.length}]:\n${listStr}${more}`, roomUid);
+            sendChatMessage(`Kicked Users in ${details.roomName || targetRoomUid} [${kicked.length}]:\n${listStr}${more}`, roomUid);
           }
         } catch (err) {
           console.error(`Failed to fetch kick list for ${targetRoomUid}:`, err.message);
@@ -1316,7 +1336,7 @@ function setupChatHandler(roomUid) {
           return;
         }
         setRoomLocked(true, roomUid);
-        sendChatMessage("🔒 Room is now LOCKED. Only authorized users can enter. Unauthorized joiners will be auto-kicked.", roomUid);
+        sendChatMessage("Room is now LOCKED. Only authorized users can enter. Unauthorized joiners will be auto-kicked.", roomUid);
       } else if (lowerMsg === "!unlock") {
         if (!isAllowedAdminUser(senderUsername)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
@@ -1327,19 +1347,19 @@ function setupChatHandler(roomUid) {
           clearTimeout(timer);
         }
         pendingLockEjections.clear();
-        sendChatMessage("🔓 Room is now UNLOCKED. Everyone can now enter!", roomUid);
+        sendChatMessage("Room is now UNLOCKED. Everyone can now enter!", roomUid);
       } else if (lowerMsg === "!a_users" || lowerMsg === "!ausers") {
         if (!isAllowedAdminUser(senderUsername)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
         const users = loadAllowedUsers();
-        const lockStatus = isRoomLocked() ? "🔒 LOCKED" : "🔓 UNLOCKED";
+        const lockStatus = isRoomLocked() ? "LOCKED" : "UNLOCKED";
         if (users.length === 0) {
-          sendChatMessage(`📋 Authorized Users [Room: ${lockStatus}]: No authorized users listed.`, roomUid);
+          sendChatMessage(`Authorized Users [Room: ${lockStatus}]: No authorized users listed.`, roomUid);
         } else {
           const listStr = users.map((u, i) => `${i + 1}. @${u}`).join("\n");
-          sendChatMessage(`📋 Authorized Users [Room: ${lockStatus}] (${users.length}):\n${listStr}`, roomUid);
+          sendChatMessage(`Authorized Users [Room: ${lockStatus}] (${users.length}):\n${listStr}`, roomUid);
         }
       } else if (lowerMsg.startsWith("!a_user ") || lowerMsg.startsWith("!auser ")) {
         if (!isAllowedAdminUser(senderUsername)) {
@@ -1353,7 +1373,7 @@ function setupChatHandler(roomUid) {
         }
         const added = await addAllowedUser(target, roomUid);
         if (added) {
-          sendChatMessage(`✅ Added @${target} to authorized users list.`, roomUid);
+          sendChatMessage(`Added @${target} to authorized users list.`, roomUid);
         } else {
           sendChatMessage(`@${target} is already in the authorized users list.`, roomUid);
         }
@@ -1373,7 +1393,7 @@ function setupChatHandler(roomUid) {
         }
         const removed = await removeAllowedUser(target, roomUid);
         if (removed) {
-          sendChatMessage(`🗑️ Removed @${target} from authorized users list.`, roomUid);
+          sendChatMessage(`Removed @${target} from authorized users list.`, roomUid);
         } else {
           sendChatMessage(`@${target} was not found in authorized users list.`, roomUid);
         }

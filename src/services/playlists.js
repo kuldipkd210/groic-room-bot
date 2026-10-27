@@ -76,7 +76,7 @@ function savePlaylistsLocally(data) {
  * Syncs playlists from JSONBlob cloud storage on startup or room join.
  */
 async function syncPlaylistsFromCloud() {
-  const blobId = process.env.PLAYLISTS_BLOB_ID;
+  const blobId = process.env.PLAYLISTS_BLOB_ID || process.env.PLAYLIST_BLOB_ID;
   if (!blobId) {
     console.log("[Playlists] No PLAYLISTS_BLOB_ID configured. Using local playlists.json.");
     loadPlaylists();
@@ -86,9 +86,11 @@ async function syncPlaylistsFromCloud() {
   console.log(`[Playlists] Syncing playlists from cloud JSONBlob: ${blobId}`);
   try {
     const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, {
-      headers: { Accept: "application/json" },
-      timeout: 10000,
-      proxy: false
+      headers: {
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+      },
+      timeout: 10000
     });
 
     if (res.data && typeof res.data === "object") {
@@ -112,7 +114,7 @@ async function syncPlaylistsFromCloud() {
 async function savePlaylistsAndSync(data) {
   savePlaylistsLocally(data);
 
-  const blobId = process.env.PLAYLISTS_BLOB_ID;
+  const blobId = process.env.PLAYLISTS_BLOB_ID || process.env.PLAYLIST_BLOB_ID;
   if (!blobId) {
     return;
   }
@@ -122,10 +124,10 @@ async function savePlaylistsAndSync(data) {
     await axios.put(`https://jsonblob.com/api/jsonBlob/${blobId}`, data, {
       headers: {
         "Content-Type": "application/json",
-        Accept: "application/json"
+        Accept: "application/json",
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
       },
-      timeout: 10000,
-      proxy: false
+      timeout: 10000
     });
     console.log(`[Playlists] Successfully updated cloud JSONBlob ${blobId}.`);
   } catch (err) {
