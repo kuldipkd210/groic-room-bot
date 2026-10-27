@@ -44,7 +44,7 @@ class MusicPlayer {
   /**
    * Loads a Spotify playlist/album and optionally starts playback immediately.
    */
-  async loadSpotifyPlaylist(input, options = { autoPlay: true }) {
+  async loadSpotifyPlaylist(input, options = { autoPlay: true, shuffle: true }) {
     console.log(`[MusicPlayer] Loading Spotify playlist: ${input}`);
     const data = await getSpotifyTracks(input);
 
@@ -53,7 +53,18 @@ class MusicPlayer {
     }
 
     this.clearAdvanceTimer();
-    this.playlist = data.tracks;
+    let tracks = [...data.tracks];
+
+    // Automatically shuffle tracks before loading
+    if (options.shuffle !== false && tracks.length > 1) {
+      for (let i = tracks.length - 1; i > 0; i--) {
+        const j = Math.floor(Math.random() * (i + 1));
+        [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
+      }
+      console.log(`[MusicPlayer] 🔀 Shuffled ${tracks.length} tracks before loading.`);
+    }
+
+    this.playlist = tracks;
     this.playlistName = data.name || "Spotify Playlist";
     this.currentIndex = 0;
     this.resolvedCache.clear();
@@ -230,6 +241,32 @@ class MusicPlayer {
       }
     }
     return await this.playIndex(nextIndex);
+  }
+
+  /**
+   * Shuffles upcoming tracks in active playlist.
+   */
+  shuffle() {
+    if (!this.playlist || this.playlist.length <= 1) return false;
+
+    const remaining = this.playlist.slice(this.currentIndex + 1);
+    for (let i = remaining.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [remaining[i], remaining[j]] = [remaining[j], remaining[i]];
+    }
+
+    this.playlist = [
+      ...this.playlist.slice(0, this.currentIndex + 1),
+      ...remaining
+    ];
+
+    this.resolvedCache.clear();
+    if (this.currentSong && this.currentIndex >= 0) {
+      this.resolvedCache.set(this.currentIndex, this.currentSong);
+    }
+
+    this.resolveAllInBackground();
+    return true;
   }
 
   /**

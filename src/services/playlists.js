@@ -170,9 +170,9 @@ function formatPlaylistList() {
     text += `\n• ${name}`;
   });
 
-  text += `\n\nPlay: !load <name>`;
-  text += `\nAdd: !addlist <name> <spotify playlist url>`;
-  text += `\nDelete: !delist <name>`;
+  text += `\n\nPlay : !load <name>`;
+  text += `\nAdd : !addlist <name> <spotify playlist url>`;
+  text += `\nDelete : !delist <name>`;
   return text;
 }
 

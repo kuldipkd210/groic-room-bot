@@ -1,7 +1,8 @@
 const { refreshAccessToken, getToken } = require("../auth");
 const { getRoomDetails, getActivePublicRooms } = require("../api");
 const { loadRoomUid } = require("../storage");
-const { createSocketInstance } = require("../socket");
+const { createSocketInstance, fetchRoomState } = require("../socket");
+const { loadAllowedUsers, addAllowedUser, removeAllowedUser, isRoomLocked, setRoomLocked } = require("../services/allowedUsers");
 
 async function socketEmitAddAdmin(roomUid, targetUsername, targetIsAdmin) {
   return new Promise((resolve) => {
@@ -28,7 +29,12 @@ async function socketEmitAddAdmin(roomUid, targetUsername, targetIsAdmin) {
     });
 
     socket.on("presenceUpdate", (data) => {
-      socket.emit("addAdmin", targetUsername);
+      const activeAdmins = data?.admins || [];
+      const isCurrentlySocketAdmin = activeAdmins.includes(targetUsername);
+
+      if (targetIsAdmin !== isCurrentlySocketAdmin) {
+        socket.emit("addAdmin", targetUsername);
+      }
       setTimeout(finish, 1000);
     });
 
@@ -118,15 +124,26 @@ async function socketEmitClearKicks(roomUid, kickedUsernames) {
 
 async function run() {
   const action = process.argv[2];
-  const validActions = ["kick", "unkick", "clear-kicks", "add-admin", "remove-admin", "list-rooms", "kick-all", "unkick-all"];
+  const validActions = [
+    "kick", "unkick", "klist", "kick-list", "kicks", "clear-kicks",
+    "add-admin", "remove-admin", "list-rooms", "kick-all", "unkick-all",
+    "lock", "unlock", "ausers", "a_users", "auser", "a_user", "uauser", "un_user"
+  ];
 
   if (!action || !validActions.includes(action.toLowerCase())) {
     console.error("Usage:\n" +
       "  node roomAction.js kick [roomUid] <username>\n" +
       "  node roomAction.js unkick [roomUid] <username>\n" +
+      "  node roomAction.js klist [roomUid]\n" +
+      "  node roomAction.js kick-list [roomUid]\n" +
       "  node roomAction.js clear-kicks [roomUid]\n" +
       "  node roomAction.js add-admin [roomUid] <username>\n" +
       "  node roomAction.js remove-admin [roomUid] <username>\n" +
+      "  node roomAction.js lock\n" +
+      "  node roomAction.js unlock\n" +
+      "  node roomAction.js ausers\n" +
+      "  node roomAction.js auser <username>\n" +
+      "  node roomAction.js uauser <username>\n" +
       "  node roomAction.js list-rooms\n" +
       "  node roomAction.js kick-all <username>\n" +
       "  node roomAction.js unkick-all <username>\n"
@@ -137,8 +154,9 @@ async function run() {
   let roomUid = null;
   let targetUsername = null;
   const arg3 = process.argv[3];
+  const noRoomRequired = ["list-rooms", "kick-all", "unkick-all", "lock", "unlock", "ausers", "a_users", "auser", "a_user", "uauser", "un_user"];
 
-  if (["kick-all", "unkick-all"].includes(action.toLowerCase())) {
+  if (["kick-all", "unkick-all", "auser", "a_user", "uauser", "un_user"].includes(action.toLowerCase())) {
     targetUsername = arg3;
   } else if (["kick", "unkick", "add-admin", "remove-admin"].includes(action.toLowerCase())) {
     if (process.argv[4]) {
@@ -148,16 +166,16 @@ async function run() {
       roomUid = loadRoomUid();
       targetUsername = arg3;
     }
-  } else if (action.toLowerCase() !== "list-rooms") {
+  } else if (!noRoomRequired.includes(action.toLowerCase())) {
     roomUid = arg3 || loadRoomUid();
   }
 
-  if (action.toLowerCase() !== "list-rooms" && action.toLowerCase() !== "kick-all" && action.toLowerCase() !== "unkick-all" && !roomUid) {
+  if (!noRoomRequired.includes(action.toLowerCase()) && !roomUid) {
     console.error("Error: No roomUid found in room.json or specified in arguments");
     process.exit(1);
   }
 
-  if (["kick", "unkick", "add-admin", "remove-admin", "kick-all", "unkick-all"].includes(action.toLowerCase()) && !targetUsername) {
+  if (["kick", "unkick", "add-admin", "remove-admin", "kick-all", "unkick-all", "auser", "a_user", "uauser", "un_user"].includes(action.toLowerCase()) && !targetUsername) {
     console.error(`Error: Action '${action}' requires a username.`);
     process.exit(1);
   }
@@ -184,17 +202,49 @@ async function run() {
       console.log(`Propagating ${isKick ? "kick" : "unkick"} via Socket to ${roomUid}...`);
       await socketEmitKickUser(roomUid, targetUsername, isKick);
       console.log("Completed successfully.");
+    } else if (action.toLowerCase() === "klist" || action.toLowerCase() === "kick-list" || action.toLowerCase() === "kicks") {
+      const details = await fetchRoomState(roomUid);
+      if (!details) {
+        console.log(`Room ${roomUid} not found or inaccessible.`);
+      } else {
+        const kicked = details.kicked || [];
+        console.log(`\nRoom: ${details.roomName || "Unnamed"} (${roomUid})`);
+        console.log(`Total kicked users: ${kicked.length}`);
+        if (kicked.length === 0) {
+          console.log("  No kicked users.");
+        } else {
+          kicked.forEach((u, i) => console.log(`  ${i + 1}. ${u}`));
+        }
+      }
     } else if (action.toLowerCase() === "clear-kicks") {
-      const details = await getRoomDetails(roomUid);
+      const details = await fetchRoomState(roomUid);
       if (details && details.kicked && details.kicked.length > 0) {
         await socketEmitClearKicks(roomUid, details.kicked);
         console.log("Kicks cleared successfully.");
+      } else {
+        console.log("No kicked users found to clear.");
       }
     } else if (action.toLowerCase() === "add-admin" || action.toLowerCase() === "remove-admin") {
       const isAdmin = action.toLowerCase() === "add-admin";
       console.log(`Propagating admin update via Socket to ${roomUid}...`);
       await socketEmitAddAdmin(roomUid, targetUsername, isAdmin);
       console.log("Completed successfully.");
+    } else if (action.toLowerCase() === "lock") {
+      setRoomLocked(true);
+      console.log("Room is now LOCKED (persisted in room_lock.json).");
+    } else if (action.toLowerCase() === "unlock") {
+      setRoomLocked(false);
+      console.log("Room is now UNLOCKED (persisted in room_lock.json).");
+    } else if (action.toLowerCase() === "ausers" || action.toLowerCase() === "a_users") {
+      const users = loadAllowedUsers();
+      console.log(`Lock status: ${isRoomLocked() ? "LOCKED" : "UNLOCKED"}`);
+      console.log(`Authorized users (${users.length}):`, users);
+    } else if (action.toLowerCase() === "auser" || action.toLowerCase() === "a_user") {
+      await addAllowedUser(targetUsername);
+      console.log(`Added @${targetUsername} to authorized users list.`);
+    } else if (action.toLowerCase() === "uauser" || action.toLowerCase() === "un_user") {
+      await removeAllowedUser(targetUsername);
+      console.log(`Removed @${targetUsername} from authorized users list.`);
     }
   } catch (err) {
     console.error("Error:", err.message);
