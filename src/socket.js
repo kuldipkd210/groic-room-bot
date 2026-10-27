@@ -1,5 +1,6 @@
 const { io } = require("socket.io-client");
 const { getToken } = require("./auth");
+const { OWNER_USERNAME } = require("../config/constants");
 const { HttpsProxyAgent } = require("https-proxy-agent");
 
 let socket = null;
@@ -91,10 +92,44 @@ function updateSocketAuth(token) {
   }
 }
 
+async function fetchRoomState(roomUid) {
+  return new Promise((resolve) => {
+    const token = getToken();
+    const s = createSocketInstance("https://socket-v2.groic.in", token);
+
+    let finished = false;
+    const finish = (res) => {
+      if (!finished) {
+        finished = true;
+        s.disconnect();
+        resolve(res);
+      }
+    };
+
+    s.on("connect", () => {
+      s.emit("joinRoom", {
+        roomUid,
+        username: OWNER_USERNAME,
+        name: OWNER_USERNAME,
+        imageUrl: "",
+        isBot: false
+      });
+    });
+
+    s.on("roomState", (data) => {
+      finish(data);
+    });
+
+    s.on("connect_error", () => finish(null));
+    setTimeout(() => finish(null), 5000);
+  });
+}
+
 module.exports = {
   connectSocket,
   getSocket,
   emit,
   updateSocketAuth,
-  createSocketInstance
+  createSocketInstance,
+  fetchRoomState
 };
