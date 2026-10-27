@@ -61,7 +61,7 @@ class MusicPlayer {
         const j = Math.floor(Math.random() * (i + 1));
         [tracks[i], tracks[j]] = [tracks[j], tracks[i]];
       }
-      console.log(`[MusicPlayer] 🔀 Shuffled ${tracks.length} tracks before loading.`);
+      console.log(`[MusicPlayer] Shuffled ${tracks.length} tracks before loading.`);
     }
 
     this.playlist = tracks;
@@ -94,7 +94,7 @@ class MusicPlayer {
         index = 0;
       } else {
         this.stop();
-        this.notifyChat("🎵 Playlist has reached the end.");
+        this.notifyChat("Playlist has reached the end.");
         return null;
       }
     }
@@ -148,7 +148,7 @@ class MusicPlayer {
       console.log(`[MusicPlayer] Track ended. Auto-advancing to next track...`);
       const nextSong = await this.next();
       if (nextSong) {
-        this.notifyChat(`🎶 Now Playing: "${nextSong.title}" by ${nextSong.artist}`);
+        this.notifyChat(`Now Playing: "${nextSong.title}" by ${nextSong.artist}`);
       }
     }, timeoutMs);
   }
