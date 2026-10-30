@@ -1,14 +1,12 @@
 const fs = require("fs");
 const path = require("path");
-const axios = require("axios");
-const { DEFAULT_PLAYLISTS } = require("../../config/constants");
 
 const PLAYLISTS_FILE = path.join(__dirname, "../../playlists.json");
 
 let playlistsCache = null;
 
 /**
- * Normalizes input so each playlist is simply: { "name": "url" }
+ * Normalizes input so each playlist is: { "name": { "url": "...", "addedBy": "..." } }
  */
 function normalizePlaylists(data) {
   if (!data || typeof data !== "object") return {};
@@ -17,43 +15,44 @@ function normalizePlaylists(data) {
   for (const [key, val] of Object.entries(data)) {
     const cleanName = key.toLowerCase().trim();
     if (typeof val === "string") {
-      normalized[cleanName] = val.trim();
+      normalized[cleanName] = {
+        url: val.trim(),
+        addedBy: null
+      };
     } else if (val && typeof val === "object" && val.url) {
-      normalized[cleanName] = val.url.trim();
+      normalized[cleanName] = {
+        url: val.url.trim(),
+        addedBy: val.addedBy ? String(val.addedBy).replace(/^@/, "").trim() : null
+      };
     }
   }
   return normalized;
 }
 
 /**
- * Loads playlists from playlists.json, falling back to DEFAULT_PLAYLISTS if missing or empty.
+ * Loads playlists from playlists.json without forcing default playlists.
  */
 function loadPlaylists() {
   if (playlistsCache) return playlistsCache;
 
   if (!fs.existsSync(PLAYLISTS_FILE)) {
     try {
-      fs.writeFileSync(PLAYLISTS_FILE, JSON.stringify(DEFAULT_PLAYLISTS, null, 2), "utf8");
+      fs.writeFileSync(PLAYLISTS_FILE, JSON.stringify({}, null, 2), "utf8");
     } catch (err) {
-      console.error("[Playlists] Failed to create playlists.json, using defaults:", err.message);
+      console.error("[Playlists] Failed to create playlists.json:", err.message);
     }
-    playlistsCache = normalizePlaylists(DEFAULT_PLAYLISTS);
+    playlistsCache = {};
     return playlistsCache;
   }
 
   try {
     const raw = fs.readFileSync(PLAYLISTS_FILE, "utf8");
     const parsed = JSON.parse(raw);
-    const normalized = normalizePlaylists(parsed);
-    if (Object.keys(normalized).length === 0) {
-      playlistsCache = normalizePlaylists(DEFAULT_PLAYLISTS);
-    } else {
-      playlistsCache = normalized;
-    }
+    playlistsCache = normalizePlaylists(parsed);
     return playlistsCache;
   } catch (err) {
-    console.error("[Playlists] Failed to read playlists.json, using defaults:", err.message);
-    playlistsCache = normalizePlaylists(DEFAULT_PLAYLISTS);
+    console.error("[Playlists] Failed to read playlists.json:", err.message);
+    playlistsCache = {};
     return playlistsCache;
   }
 }
@@ -72,67 +71,36 @@ function savePlaylistsLocally(data) {
   }
 }
 
+const { getBasket, setBasket } = require("./pantry");
+
 /**
- * Syncs playlists from JSONBlob cloud storage on startup or room join.
+ * Syncs playlists from Pantry cloud storage on startup or room join.
  */
 async function syncPlaylistsFromCloud() {
-  const blobId = process.env.PLAYLISTS_BLOB_ID || process.env.PLAYLIST_BLOB_ID;
-  if (!blobId) {
-    console.log("[Playlists] No PLAYLISTS_BLOB_ID configured. Using local playlists.json.");
-    loadPlaylists();
+  console.log("[Playlists] Syncing playlists from Pantry cloud basket: 'playlists'");
+  const cloudData = await getBasket("playlists");
+
+  if (cloudData && typeof cloudData === "object") {
+    const fromCloud = normalizePlaylists(cloudData);
+    savePlaylistsLocally(fromCloud);
+    console.log(`[Playlists] Successfully synced ${Object.keys(fromCloud).length} playlists from Pantry.`);
     return;
   }
 
-  console.log(`[Playlists] Syncing playlists from cloud JSONBlob: ${blobId}`);
-  try {
-    const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, {
-      headers: {
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      },
-      timeout: 10000
-    });
-
-    if (res.data && typeof res.data === "object") {
-      const fromCloud = normalizePlaylists(res.data);
-      if (Object.keys(fromCloud).length > 0) {
-        savePlaylistsLocally(fromCloud);
-        console.log(`[Playlists] Successfully synced ${Object.keys(fromCloud).length} playlists from cloud JSONBlob.`);
-        return;
-      }
-    }
-  } catch (err) {
-    console.error(`[Playlists] Failed to read cloud JSONBlob ${blobId}:`, err.message);
-  }
-
+  // If basket doesn't exist on Pantry, initialize it as empty {}
+  console.log("[Playlists] Initializing empty 'playlists' basket in Pantry...");
+  await setBasket("playlists", {});
   loadPlaylists();
 }
 
 /**
- * Saves locally and syncs to JSONBlob cloud storage.
+ * Saves locally and syncs to Pantry cloud storage.
  */
 async function savePlaylistsAndSync(data) {
   savePlaylistsLocally(data);
-
-  const blobId = process.env.PLAYLISTS_BLOB_ID || process.env.PLAYLIST_BLOB_ID;
-  if (!blobId) {
-    return;
-  }
-
-  console.log(`[Playlists] Uploading playlists to cloud JSONBlob: ${blobId}`);
-  try {
-    await axios.put(`https://jsonblob.com/api/jsonBlob/${blobId}`, data, {
-      headers: {
-        "Content-Type": "application/json",
-        Accept: "application/json",
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-      },
-      timeout: 10000
-    });
-    console.log(`[Playlists] Successfully updated cloud JSONBlob ${blobId}.`);
-  } catch (err) {
-    console.error(`[Playlists] Failed to update cloud JSONBlob ${blobId}:`, err.message);
-  }
+  console.log("[Playlists] Uploading playlists to Pantry cloud basket: 'playlists'");
+  const syncResult = await setBasket("playlists", data);
+  return syncResult;
 }
 
 /**
@@ -150,45 +118,70 @@ function findPlaylist(name) {
   const q = trimmed.toLowerCase();
 
   if (playlists[q]) {
-    return { name: q, url: playlists[q] };
+    const item = playlists[q];
+    const url = typeof item === "string" ? item : item.url;
+    const addedBy = typeof item === "object" ? item.addedBy : null;
+    return { name: q, url, addedBy };
   }
 
   return null;
 }
 
 /**
- * Formats all saved playlists for !lists output with exactly one name per playlist.
+ * Formats all saved playlists for !pl list output with recorder credit:
+ * │ • playlist_1 • [username]
  */
 function formatPlaylistList() {
   const playlists = loadPlaylists();
   const names = Object.keys(playlists);
 
+  let lines = [
+    "╭─── 🎧 SAVED PLAYLISTS ────╮",
+    " "
+  ];
+
   if (names.length === 0) {
-    return "No saved playlists found.\nAdd one using: !addlist <name> <url>";
+    lines.push("  (No saved playlists found)");
+  } else {
+    names.forEach((name) => {
+      const item = playlists[name];
+      const addedBy = typeof item === "object" && item?.addedBy ? item.addedBy : null;
+      if (addedBy) {
+        lines.push(`  • ${name} • [${addedBy}]`);
+      } else {
+        lines.push(`  • ${name}`);
+      }
+    });
+    lines.push(" ");
+    lines.push("├──────────────────────┤");
+    lines.push("  • !pl play [name] • play");
   }
 
-  let text = "Saved Playlists:\n";
-  names.forEach((name) => {
-    text += `\n• ${name}`;
-  });
-
-  text += `\n\nPlay : !load <name>`;
-  text += `\nAdd : !addlist <name> <spotify playlist url>`;
-  text += `\nDelete : !delist <name>`;
-  return text;
+  lines.push("╰──────────────────────╯");
+  return lines.join("\n");
 }
 
 /**
- * Adds a new playlist by single name.
+ * Adds a new playlist by single name and records who added it.
  */
-async function addSavedPlaylist(name, url) {
+async function addSavedPlaylist(name, url, addedBy = null) {
   const playlists = { ...loadPlaylists() };
   const cleanName = name.toLowerCase().trim().replace(/\s+/g, "_");
+  const cleanUser = addedBy ? String(addedBy).replace(/^@/, "").trim() : null;
 
-  playlists[cleanName] = url.trim();
+  playlists[cleanName] = {
+    url: url.trim(),
+    addedBy: cleanUser
+  };
 
-  await savePlaylistsAndSync(playlists);
-  return { name: cleanName, url: url.trim() };
+  const syncResult = await savePlaylistsAndSync(playlists);
+  return {
+    name: cleanName,
+    url: url.trim(),
+    addedBy: cleanUser,
+    cloudSynced: syncResult?.success ?? false,
+    cloudError: syncResult?.error || null
+  };
 }
 
 /**
@@ -202,10 +195,16 @@ async function removeSavedPlaylist(name) {
     return null;
   }
 
-  const url = playlists[cleanName];
+  const item = playlists[cleanName];
+  const url = typeof item === "string" ? item : item.url;
   delete playlists[cleanName];
-  await savePlaylistsAndSync(playlists);
-  return { name: cleanName, url };
+  const syncResult = await savePlaylistsAndSync(playlists);
+  return {
+    name: cleanName,
+    url,
+    cloudSynced: syncResult?.success ?? false,
+    cloudError: syncResult?.error || null
+  };
 }
 
 module.exports = {

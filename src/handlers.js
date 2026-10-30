@@ -1,5 +1,5 @@
 const { getSocket, emit, createSocketInstance, fetchRoomState } = require("./socket");
-const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, ROOM_DESC, ROOM_NAME, ROOM_GENRE, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS } = require("../config/constants");
+const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS, DEFAULT_ALLOWED_ADMINS } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
 const { getToken } = require("./auth");
@@ -51,62 +51,31 @@ function handleUnauthorizedJoin(username, roomUid) {
 
 
 
-function encodeUUID(uuid) {
-  const hex = uuid.replace(/-/g, "");
-  if (hex.length !== 32) return "";
-
-  return hex.split("").map(char => {
-    const num = parseInt(char, 16);
-    return num.toString(2).padStart(4, "0")
-      .replace(/0/g, "\u200C")
-      .replace(/1/g, "\u200D");
-  }).join("");
-}
-
-function decodeUUID(encodedStr) {
-  if (!encodedStr) return null;
-  // Match any zero-width characters (including U+200C, U+200D, and U+200B)
-  const match = encodedStr.match(/[\u200C\u200D\u200B]+/g);
-  if (!match) return null;
-
-  // Combine all matches and strip out zero-width spaces (U+200B)
-  const combined = match.join("").replace(/\u200B/g, "");
-  if (combined.length < 128) return null;
-
-  // Slice the last 128 characters representing the most recent UUID
-  const bits = combined.substring(combined.length - 128);
-  let hex = "";
-  for (let i = 0; i < bits.length; i += 4) {
-    const chunk = bits.substring(i, i + 4);
-    const binary = chunk.replace(/\u200C/g, "0").replace(/\u200D/g, "1");
-    hex += parseInt(binary, 2).toString(16);
-  }
-
-  return `${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}`;
-}
-
 function loadAllowedAdmins() {
-  if (allowedAdminsCache.length === 0) {
-    const defaultAdmins = ["_darth_vader_", "dedsec_404", "_its_shru_"];
-    if (!fs.existsSync(ALLOWED_ADMINS_FILE)) {
-      allowedAdminsCache = defaultAdmins.map(u => u.toLowerCase().trim());
-    } else {
-      try {
-        const list = JSON.parse(fs.readFileSync(ALLOWED_ADMINS_FILE, "utf8"));
-        if (Array.isArray(list)) {
-          allowedAdminsCache = list.map(u => u.toLowerCase().trim());
-        }
-      } catch (err) {
-        console.error("Failed to load allowed_admins.json, using defaults", err);
-        allowedAdminsCache = defaultAdmins.map(u => u.toLowerCase().trim());
-      }
+  const defaults = DEFAULT_ALLOWED_ADMINS.map(u => u.toLowerCase().trim());
+  if (!fs.existsSync(ALLOWED_ADMINS_FILE)) {
+    saveAllowedAdmins(defaults);
+    return allowedAdminsCache;
+  }
+  try {
+    const list = JSON.parse(fs.readFileSync(ALLOWED_ADMINS_FILE, "utf8"));
+    let fromFile = [];
+    if (Array.isArray(list)) {
+      fromFile = list.map(u => u.toLowerCase().trim());
     }
+    const merged = Array.from(new Set([...defaults, ...fromFile]));
+    saveAllowedAdmins(merged);
+  } catch (err) {
+    console.error("Failed to load allowed_admins.json, using defaults", err);
+    saveAllowedAdmins(defaults);
   }
   return allowedAdminsCache;
 }
 
 function saveAllowedAdmins(adminsList) {
-  allowedAdminsCache = adminsList.map(u => u.toLowerCase().trim());
+  const defaults = DEFAULT_ALLOWED_ADMINS.map(u => u.toLowerCase().trim());
+  const cleanList = (adminsList || []).map(u => u.toLowerCase().trim());
+  allowedAdminsCache = Array.from(new Set([...defaults, ...cleanList]));
   try {
     fs.writeFileSync(ALLOWED_ADMINS_FILE, JSON.stringify(allowedAdminsCache, null, 2));
   } catch (err) {
@@ -114,178 +83,36 @@ function saveAllowedAdmins(adminsList) {
   }
 }
 
-async function syncAllowedAdminsFromCloud(roomUid) {
-  const envBlobId = process.env.ALLOWED_ADMINS_BLOB_ID;
-  if (envBlobId) {
-    console.log(`[Handlers] Syncing allowed admins using env blob ID: ${envBlobId}`);
-    try {
-      const axios = require("axios");
-      const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, { timeout: 10000, proxy: false });
-      if (Array.isArray(res.data)) {
-        const fromCloud = res.data.map(u => u.toLowerCase().trim());
-        saveAllowedAdmins(fromCloud);
-        console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
-      }
-    } catch (err) {
-      console.error(`[Handlers] Failed to read env JSON Blob ${envBlobId}:`, err.message);
+const { getBasket: getPantryBasket, setBasket: setPantryBasket } = require("./services/pantry");
+
+async function syncAllowedAdminsFromCloud() {
+  console.log("[Handlers] Syncing allowed admins from Pantry cloud basket: 'allowed_admins'");
+  const cloudData = await getPantryBasket("allowed_admins");
+  const defaults = DEFAULT_ALLOWED_ADMINS.map(u => u.toLowerCase().trim());
+
+  if (cloudData && Array.isArray(cloudData.admins)) {
+    const fromCloud = cloudData.admins.map(u => u.toLowerCase().trim());
+    const merged = Array.from(new Set([...defaults, ...fromCloud]));
+    saveAllowedAdmins(merged);
+    console.log(`[Handlers] Successfully synced ${merged.length} allowed admins from Pantry.`);
+
+    // If cloud was missing any hardcoded admins, update Pantry
+    if (merged.length !== fromCloud.length) {
+      await setPantryBasket("allowed_admins", { admins: merged });
     }
     return;
   }
 
-  try {
-    const details = await getRoomDetails(roomUid);
-    if (!details) return;
-
-    const desc = details.roomDesc || "";
-    let blobId = decodeUUID(desc);
-
-    const countryVal = (details.roomCountry || "").trim();
-    const countryIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
-
-    if (!blobId && countryIsUuid) {
-      blobId = countryVal;
-      console.log(`[Handlers] Migrating legacy JSON Blob ID from roomCountry: ${blobId}`);
-    }
-
-    const axios = require("axios");
-    const VALID_GENRES = ["pop", "popular", "rock", "hip hop", "dance", "jazz", "classical", "metal", "country", "r&b", "electronic", "acoustic", "indie"];
-    const cleanGenres = (ROOM_GENRE || []).filter(g => typeof g === "string" && VALID_GENRES.includes(g.toLowerCase().trim()));
-    if (cleanGenres.length === 0) cleanGenres.push("Popular");
-
-    if (blobId) {
-      console.log(`[Handlers] Found JSON Blob ID: ${blobId}`);
-      try {
-        const res = await axios.get(`https://jsonblob.com/api/jsonBlob/${blobId}`, { timeout: 10000, proxy: false });
-        if (Array.isArray(res.data)) {
-          const fromCloud = res.data.map(u => u.toLowerCase().trim());
-          saveAllowedAdmins(fromCloud);
-          console.log("[Handlers] Successfully synced allowed admins from cloud:", fromCloud);
-
-          const baseDesc = desc.replace(/[\u200C\u200D\u200B]+/g, "").trim();
-          const targetDesc = ROOM_DESC || baseDesc;
-          const newDesc = `${targetDesc}\n\n${encodeUUID(blobId)}`.trim();
-
-          const needsDescUpdate = (desc !== newDesc);
-          const needsNameUpdate = (details.roomName !== ROOM_NAME);
-          const needsGenreUpdate = JSON.stringify(details.roomGenre) !== JSON.stringify(cleanGenres);
-          const needsCountryRestore = (details.roomCountry !== "IN");
-
-          if (needsDescUpdate || needsNameUpdate || needsGenreUpdate || needsCountryRestore) {
-            const payload = {
-              roomName: ROOM_NAME,
-              roomDesc: newDesc,
-              roomGenre: cleanGenres,
-              roomCountry: "IN",
-              maxParticipants: details.maxParticipants || 50
-            };
-            const { getGroicHeaders } = require("./api");
-            await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
-              headers: getGroicHeaders(),
-              timeout: 10000
-            });
-            console.log("[Handlers] Updated room details, description with invisible JSON Blob ID, and restored country database.");
-          }
-          return;
-        }
-      } catch (getErr) {
-        console.error(`[Handlers] Failed to read JSON Blob ${blobId}:`, getErr.message);
-      }
-    }
-
-    // If no UUID found, create a new JSON Blob
-    console.log("[Handlers] Creating a new cloud JSON Blob for allowed admins...");
-    const localList = loadAllowedAdmins();
-    const createRes = await axios.post("https://jsonblob.com/api/jsonBlob", localList, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 10000,
-      proxy: false
-    });
-
-    const location = createRes.headers["location"] || "";
-    const newBlobId = location.split("/").pop();
-    if (!newBlobId) {
-      throw new Error("Failed to retrieve new JSON Blob ID from location header");
-    }
-
-    console.log(`[Handlers] New JSON Blob ID created: ${newBlobId}`);
-
-    const baseDesc = desc.replace(/[\u200C\u200D\u200B]+/g, "").trim();
-    const targetDesc = ROOM_DESC || baseDesc;
-    const newDesc = `${targetDesc}\n\n${encodeUUID(newBlobId)}`.trim();
-
-    const payload = {
-      roomName: ROOM_NAME,
-      roomDesc: newDesc,
-      roomGenre: cleanGenres,
-      roomCountry: "IN",
-      maxParticipants: details.maxParticipants || 50
-    };
-
-    const { getGroicHeaders } = require("./api");
-    await axios.patch(`https://api.groic.in/api/room/${roomUid}`, payload, {
-      headers: getGroicHeaders(),
-      timeout: 10000
-    });
-    console.log("[Handlers] Registered JSON Blob ID in room description invisibly.");
-  } catch (err) {
-    if (err.response) {
-      console.error("[Handlers] Cloud sync failed response status:", err.response.status);
-      console.error("[Handlers] Cloud sync failed response data:", JSON.stringify(err.response.data));
-    } else {
-      console.error("[Handlers] Cloud sync failed:", err.message);
-    }
-  }
+  // If Pantry basket is empty, push local admins (including hardcoded) to Pantry
+  const local = loadAllowedAdmins();
+  console.log(`[Handlers] Pantry basket empty. Pushing ${local.length} local allowed admins to Pantry...`);
+  await setPantryBasket("allowed_admins", { admins: local });
 }
 
-async function saveAllowedAdminsAndSync(list, roomUid) {
+async function saveAllowedAdminsAndSync(list) {
   saveAllowedAdmins(list);
-  const envBlobId = process.env.ALLOWED_ADMINS_BLOB_ID;
-  if (envBlobId) {
-    console.log(`[Handlers] Syncing allowed admins to env blob ID: ${envBlobId}`);
-    try {
-      const axios = require("axios");
-      await axios.put(`https://jsonblob.com/api/jsonBlob/${envBlobId}`, list, {
-        headers: { "Content-Type": "application/json" },
-        timeout: 10000,
-        proxy: false
-      });
-      console.log(`[Handlers] Successfully updated cloud JSON Blob ${envBlobId} with allowed admins.`);
-    } catch (err) {
-      console.error("[Handlers] Failed to update cloud allowed admins:", err.message);
-    }
-    return;
-  }
-
-  try {
-    const details = await getRoomDetails(roomUid);
-    if (!details) return;
-
-    const desc = details.roomDesc || "";
-    let blobId = decodeUUID(desc);
-
-    const countryVal = (details.roomCountry || "").trim();
-    const countryIsUuid = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(countryVal);
-
-    if (!blobId && countryIsUuid) {
-      blobId = countryVal;
-    }
-
-    if (!blobId) {
-      console.log("[Handlers] No JSON Blob found in roomDesc during save. Triggering sync to create one...");
-      await syncAllowedAdminsFromCloud(roomUid);
-      return;
-    }
-
-    const axios = require("axios");
-    await axios.put(`https://jsonblob.com/api/jsonBlob/${blobId}`, list, {
-      headers: { "Content-Type": "application/json" },
-      timeout: 10000,
-      proxy: false
-    });
-    console.log(`[Handlers] Successfully updated cloud JSON Blob ${blobId} with allowed admins.`);
-  } catch (err) {
-    console.error("[Handlers] Failed to update cloud allowed admins:", err.message);
-  }
+  console.log("[Handlers] Uploading allowed admins to Pantry cloud basket: 'allowed_admins'");
+  await setPantryBasket("allowed_admins", { admins: allowedAdminsCache });
 }
 
 let keepAliveInterval = null;
@@ -315,7 +142,8 @@ function getUserStatusObj(username) {
 const pendingAutoAdmins = new Set();
 let activeRoomUid = null;
 
-function isAllowedAdminUser(username) {
+function isAllowedAdminUser(username, userIsAdmin = false) {
+  if (userIsAdmin === true) return true;
   const normalized = (username || "").toLowerCase().trim();
   if (normalized === OWNER_USERNAME.toLowerCase().trim()) return true;
   const list = loadAllowedAdmins();
@@ -323,10 +151,13 @@ function isAllowedAdminUser(username) {
 }
 
 function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
+  const cleanTarget = (targetUsername || "").replace(/^@/, "").trim();
+  if (!cleanTarget) return;
+
   if (roomUid === activeRoomUid) {
     const mainSocket = getSocket();
     if (mainSocket && mainSocket.connected) {
-      mainSocket.emit("addAdmin", targetUsername);
+      mainSocket.emit("addAdmin", cleanTarget);
       return;
     }
   }
@@ -346,10 +177,10 @@ function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
 
   socket.on("presenceUpdate", (data) => {
     const activeAdmins = data?.admins || [];
-    const isCurrentlySocketAdmin = activeAdmins.includes(targetUsername);
+    const isCurrentlySocketAdmin = activeAdmins.includes(cleanTarget);
 
     if (targetIsAdmin !== isCurrentlySocketAdmin) {
-      socket.emit("addAdmin", targetUsername);
+      socket.emit("addAdmin", cleanTarget);
     }
     setTimeout(() => {
       socket.disconnect();
@@ -362,11 +193,14 @@ function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
 }
 
 function emitKickUserForRoom(roomUid, targetUsername, isKick) {
+  const cleanTarget = (targetUsername || "").replace(/^@/, "").trim();
+  if (!cleanTarget) return;
+
   if (roomUid === activeRoomUid) {
     const mainSocket = getSocket();
     if (mainSocket && mainSocket.connected) {
       mainSocket.emit("kickUser", {
-        username: targetUsername,
+        username: cleanTarget,
         addOrRemove: isKick
       });
       return;
@@ -388,7 +222,7 @@ function emitKickUserForRoom(roomUid, targetUsername, isKick) {
 
   socket.on("presenceUpdate", (data) => {
     socket.emit("kickUser", {
-      username: targetUsername,
+      username: cleanTarget,
       addOrRemove: isKick
     });
     setTimeout(() => {
@@ -651,10 +485,16 @@ function setupChatHandler(roomUid) {
   player.setRoomUid(roomUid);
   player.setChatNotifier(sendChatMessage);
 
-  // Sync allowed admins, playlists, and allowed users from cloud
-  syncAllowedAdminsFromCloud(roomUid);
-  syncPlaylistsFromCloud();
-  syncAllowedUsersFromCloud(roomUid);
+  // Sync allowed admins, playlists, and allowed users from cloud sequentially
+  (async () => {
+    try {
+      await syncAllowedAdminsFromCloud(roomUid);
+      await syncPlaylistsFromCloud();
+      await syncAllowedUsersFromCloud(roomUid);
+    } catch (err) {
+      console.error("[Handlers] Error during initial cloud sync:", err.message);
+    }
+  })();
 
   const socket = getSocket();
   if (socket) {
@@ -675,6 +515,7 @@ function setupChatHandler(roomUid) {
         message = "!" + afterExcl;
       }
       const senderUsername = data?.username || data?.user?.username || "someone";
+      const senderIsAdmin = Boolean(data?.user?.isAdmin);
 
       // Ignore empty messages
       if (!message) return;
@@ -780,19 +621,19 @@ function setupChatHandler(roomUid) {
       } else if (lowerMsg === "!status" || lowerMsg.startsWith("!status") || lowerMsg.startsWith("! status")) {
         const users = Object.keys(userStatuses).filter(u => !isBotUsername(u));
         if (users.length === 0) {
-          sendChatMessage(`No active users in the room.`, roomUid);
+          sendChatMessage("No active users in the room.", roomUid);
         } else {
           let reply = "Member Statuses:";
           for (const u of users) {
             const info = getUserStatusObj(u);
             if (info.status === "AFK" && info.reason) {
-              reply += `\n@${u} - AFK 📵 "${info.reason}"`;
+              reply += `\n• @${u} - AFK 📵 "${info.reason}"`;
             } else if (info.status === "AFK") {
-              reply += `\n@${u} - AFK 📵`;
+              reply += `\n• @${u} - AFK 📵`;
             } else if (info.reason) {
-              reply += `\n@${u} - AVL 🙋 "${info.reason}"`;
+              reply += `\n• @${u} - AVL 🙋 "${info.reason}"`;
             } else {
-              reply += `\n@${u} - AVL 🙋`;
+              reply += `\n• @${u} - AVL 🙋`;
             }
           }
           sendChatMessage(reply, roomUid);
@@ -801,44 +642,51 @@ function setupChatHandler(roomUid) {
       }
 
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!help") {
+        const botTitle = (BOT_NAME || "XAIX").toUpperCase();
         const helpMessage = [
-          "Available Public Commands:",
-          "",
-          "1. Set your status:",
-          "   > !afk [reason] — Away from keyboard 📵",
-          "   > !avl — Available 🙋",
-          "",
-          "2. !status — View all members' status with reasons.",
-          "",
-          "3. !mhelp — Access music & playlist commands.",
-          "",
-          "4. !pick dj — Randomly pick a member to play the next song.",
-          "",
-          "5. !xai <prompt> — Witty, funny & sarcastic AI companion.",
-          "",
-          "6. !ask <prompt> — Professional & informative AI answer.",
-          "",
-          "7. !callowner / !kd — Send phone alert to the room owner.",
-          "",
-          "8. !ded / !404 — Send phone alert to dedsec_404."
+          `╭── ✨ ${botTitle} COMMANDS ───╮`,
+          "│",
+          "│ ✦ Playback ctrl:",
+          "│ • !mhelp   • Music Menu",
+          "│ • !pick dj • Next DJ",
+          "│",
+          "│ ✦ Calling & Alerting:",
+          "│ • !kd [msg] / !callowner",
+          "│ • !ded [msg] / !404",
+          "│",
+          "│ ✦ Status & AFK:",
+          "│ • !afk [reason]",
+          "│ • !avl ",
+          "│ • !status",
+          "│",
+          "│ ✦ AI & Utilities:",
+          "│ • !xai [prompt] (Witty AI)",
+          "│ • !ask [prompt] (Smart AI)",
+          "│",
+          "│ ✦ Management:",
+          "│ • !ahelp (Admin Console)",
+          "│ • !ohelp (Owner Console)",
+          "╰─────────────────────╯"
         ].join("\n");
         sendChatMessage(helpMessage, roomUid);
         return;
       }
 
       if (lowerMsg.replace(/^!\s*/, "!").replace(/\s+/g, " ").trim() === "!mhelp") {
+        const botTitle = (BOT_NAME || "XAIX").toUpperCase();
         const mhelpMessage = [
-          "Music & Playlist Commands:",
-          "",
-          "• !lists — View all saved playlists.",
-          "",
-          "• !load <name> — Shuffles and plays a saved playlist.",
-          "",
-          "• !shuffle — Shuffle upcoming tracks in current queue.",
-          "",
-          "• !addlist <name> <spotify_url> — Save a playlist.",
-          "",
-          "• !delist <name> — Delete a saved playlist."
+          `╭── 🎧 ${botTitle} MUSIC MENU ─────╮`,
+          "│",
+          "│ ✦ Playback Commands:",
+          "│ • !pl list               • show playlists",
+          "│ • !pl play [name] • play playlist",
+          "│ • !shuffle             • shuffle queue",
+          "│ • !stop                 • stop playback",
+          "│",
+          "│ ✦ Library Management(Admin Only):",
+          "│ • !pl save [name] [link] • Add PL",
+          "│ • !pl del [name]             • delete PL",
+          "╰───────────────────────╯"
         ].join("\n");
         sendChatMessage(mhelpMessage, roomUid);
         return;
@@ -850,31 +698,32 @@ function setupChatHandler(roomUid) {
           return;
         }
 
+        const botTitle = (BOT_NAME || "XAIX").toUpperCase();
         const ahelpMessage = [
-          "Admin Commands:",
-          "",
-          "1. Room Moderation:",
-          "   • !admin [user] — Grant admin in this room.",
-          "   • !unadmin [user] — Revoke admin in this room.",
-          "   • !look <user> — Find which public room a user is in.",
-          "",
-          "2. Kick Commands:",
-          "   • !kick <user> — Kick a user from this room.",
-          "   • !unkick <user> — Unkick a user in this room.",
-          "   • !klist [roomUid] — View kicked users list.",
-          "",
-          "3. Room Lockdown:",
-          "   • !lock — Lock room (auto-kicks unauthorized joiners).",
-          "   • !unlock — Unlock room for everyone.",
-          "   • !a_users — View authorized users list.",
-          "   • !a_user <user> — Authorize user for locked room.",
-          "   • !un_user <user> — Remove user from authorized list.",
-          "",
-          "4. Remote Room Controls:",
-          "   • !admin room <roomUid> [user] — Remote room admin.",
-          "   • !unadmin room <roomUid> [user] — Remote room unadmin.",
-          "   • !kick room <roomUid> <user> — Kick in remote room.",
-          "   • !unkick room <roomUid> <user> — Unkick in remote room."
+          `╭── 🛡️ ${botTitle} ADMIN CONSOLE ───╮`,
+          "│",
+          "│ ✦ Room Moderation:",
+          "│ • !admin [user]      • grant admin",
+          "│ • !unadmin [user] • revoke admin",
+          "│ • !kick [user]         • kick user",
+          "│ • !unkick [user]    • unkick user",
+          "│ • !klist [roomid]   • kicked list",
+          "│ • !look [user]        • find user",
+          "│",
+          "│ ✦ Security & Defense:",
+          "│ • !lock            • auto-kick guests",
+          "│ • !unlock         • open for all",
+          "│ • !auth list        • view authorized",
+          "│ • !auth [user]     • authorize user",
+          "│ • !unauth [user]  • revoke access",
+          "│",
+          "│ ✦ Remote Room Control:",
+          "│ • !admin room [roomUid] [user]",
+          "│ • !unadmin room [roomUid] [user]",
+          "│ • !kick room [roomUid] [user]",
+          "│ • !unkick room [roomUid] [user]",
+          "│ • !klist [roomUid] • kicked list",
+          "╰───────────────────────╯"
         ].join("\n");
 
         sendChatMessage(ahelpMessage, roomUid);
@@ -886,23 +735,25 @@ function setupChatHandler(roomUid) {
           return;
         }
 
+        const botTitle = (BOT_NAME || "XAIX").toUpperCase();
         const ohelpMessage = [
-          "Owner-Only Commands:",
-          "",
-          "• !allow <user> — Add a user to allowed admins list.",
-          "",
-          "• !revoke <user> — Remove a user from allowed admins list.",
-          "",
-          "• !allowed — View all allowed admin users.",
-          "",
-          "• !kick_all rooms <user> — Sweep & kick user across ALL public rooms.",
-          "",
-          "• !unkick_all rooms <user> — Sweep & unkick user across ALL public rooms."
+          `╭── 👑 ${botTitle} OWNER CONSOLE ────╮`,
+          "│",
+          "│ ✦ Superuser Authority:",
+          "│ • !allow [user]  • add allowed admin",
+          "│ • !revoke [user] • remove admin",
+          "│ • !allowed       • view allowed admins",
+          "│",
+          "│ ✦ Global Room Sweep:",
+          "│ • !kick_all rooms [user]",
+          "│ • !unkick_all rooms [user]",
+          "╰───────────────────────────────╯"
         ].join("\n");
 
         sendChatMessage(ohelpMessage, roomUid);
         return;
       }
+
 
       if (lowerMsg.startsWith("!look") || lowerMsg.startsWith("! look")) {
         if (!isAllowedAdminUser(senderUsername)) {
@@ -998,24 +849,25 @@ function setupChatHandler(roomUid) {
       // ─── Music & Spotify Commands ──────────────────────────────────────────
       const normalizedCmd = lowerMsg.replace(/^!\s*/, "!");
 
-      if (normalizedCmd === "!lists" || normalizedCmd === "!playlists" || normalizedCmd === "!playlist list" || normalizedCmd === "!spotify list") {
+      if (normalizedCmd === "!pl list" || normalizedCmd === "!lists" || normalizedCmd === "!playlists" || normalizedCmd === "!playlist list" || normalizedCmd === "!spotify list") {
         sendChatMessage(formatPlaylistList(), roomUid);
         return;
       }
 
-      if (normalizedCmd.startsWith("!addlist ") || normalizedCmd.startsWith("!addplaylist ") || normalizedCmd.startsWith("!saveplaylist ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+      if (normalizedCmd.startsWith("!pl save ") || normalizedCmd.startsWith("!addlist ") || normalizedCmd.startsWith("!addplaylist ") || normalizedCmd.startsWith("!saveplaylist ")) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} only admins can add saved playlists.`, roomUid);
           return;
         }
         let rest = "";
-        if (normalizedCmd.startsWith("!addlist ")) rest = message.slice("!addlist ".length).trim();
+        if (normalizedCmd.startsWith("!pl save ")) rest = message.slice("!pl save ".length).trim();
+        else if (normalizedCmd.startsWith("!addlist ")) rest = message.slice("!addlist ".length).trim();
         else if (normalizedCmd.startsWith("!addplaylist ")) rest = message.slice("!addplaylist ".length).trim();
         else rest = message.slice("!saveplaylist ".length).trim();
 
         const parts = rest.split(/\s+/);
         if (parts.length < 2) {
-          sendChatMessage(`Usage: !addlist <name> <spotify_url>`, roomUid);
+          sendChatMessage("Usage: !pl save [name] [link]", roomUid);
           return;
         }
         const shortName = parts[0];
@@ -1026,33 +878,36 @@ function setupChatHandler(roomUid) {
         try {
           const info = await getSpotifyTracks(playlistUrl);
           const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
-            `Saved "${saved.name}" (${info.trackCount} tracks)!\nSynced to cloud . Play with: !load ${saved.name}`,
+            `Saved "${saved.name}" (${info.trackCount} tracks)!\n${syncStatus}. Play with: !pl play ${saved.name}`,
             roomUid
           );
         } catch (err) {
           const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
-            `Saved playlist "${saved.name}"!\n. Play with: !load ${saved.name}`,
+            `Saved playlist "${saved.name}"!\n${syncStatus}. Play with: !pl play ${saved.name}`,
             roomUid
           );
         }
         return;
       }
 
-      if (normalizedCmd.startsWith("!delist ") || normalizedCmd.startsWith("!delplaylist ") || normalizedCmd.startsWith("!deleteplaylist ") || normalizedCmd.startsWith("!removeplaylist ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+      if (normalizedCmd.startsWith("!pl del ") || normalizedCmd.startsWith("!delist ") || normalizedCmd.startsWith("!delplaylist ") || normalizedCmd.startsWith("!deleteplaylist ") || normalizedCmd.startsWith("!removeplaylist ")) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} only admins can delete saved playlists.`, roomUid);
           return;
         }
         let targetName = "";
-        if (normalizedCmd.startsWith("!delist ")) targetName = message.slice("!delist ".length).trim();
+        if (normalizedCmd.startsWith("!pl del ")) targetName = message.slice("!pl del ".length).trim();
+        else if (normalizedCmd.startsWith("!delist ")) targetName = message.slice("!delist ".length).trim();
         else if (normalizedCmd.startsWith("!delplaylist ")) targetName = message.slice("!delplaylist ".length).trim();
         else if (normalizedCmd.startsWith("!deleteplaylist ")) targetName = message.slice("!deleteplaylist ".length).trim();
         else targetName = message.slice("!removeplaylist ".length).trim();
 
         if (!targetName) {
-          sendChatMessage(`Usage: !delist <name>`, roomUid);
+          sendChatMessage("Usage: !pl del [name]", roomUid);
           return;
         }
 
@@ -1066,14 +921,23 @@ function setupChatHandler(roomUid) {
       }
 
       if (
+        normalizedCmd === "!pl play" ||
+        normalizedCmd.startsWith("!pl play ") ||
         normalizedCmd.startsWith("!load") ||
         normalizedCmd.startsWith("!playlist") ||
         normalizedCmd.startsWith("!spotify")
       ) {
-        let prefix = "!load";
-        if (normalizedCmd.startsWith("!playlist")) prefix = "!playlist";
-        else if (normalizedCmd.startsWith("!spotify")) prefix = "!spotify";
-        const arg = message.slice(message.toLowerCase().indexOf(prefix) + prefix.length).trim();
+        let arg = "";
+        if (normalizedCmd.startsWith("!pl play ")) {
+          arg = message.slice("!pl play ".length).trim();
+        } else if (normalizedCmd === "!pl play") {
+          arg = "";
+        } else {
+          let prefix = "!load";
+          if (normalizedCmd.startsWith("!playlist")) prefix = "!playlist";
+          else if (normalizedCmd.startsWith("!spotify")) prefix = "!spotify";
+          arg = message.slice(message.toLowerCase().indexOf(prefix) + prefix.length).trim();
+        }
 
         if (!arg || arg.toLowerCase() === "list") {
           sendChatMessage(formatPlaylistList(), roomUid);
@@ -1083,7 +947,7 @@ function setupChatHandler(roomUid) {
         const found = findPlaylist(arg);
         if (found && found.isUrl) {
           sendChatMessage(
-            `@${senderUsername} Direct URLs are disabled. Please save it to playlists.json first:\n> !addlist <name> ${found.url}\nThen play with: !load <name>`,
+            `@${senderUsername} Direct URLs are disabled. Please save it to playlists.json first:\n> !pl save [name] ${found.url}\nThen play with: !pl play [name]`,
             roomUid
           );
           return;
@@ -1118,8 +982,8 @@ function setupChatHandler(roomUid) {
         return;
       }
 
-      if (lowerMsg === "!shuffle") {
-        if (!isAllowedAdminUser(senderUsername)) {
+      if (lowerMsg === "!shuffle" || lowerMsg === "! shuffle") {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
@@ -1129,6 +993,16 @@ function setupChatHandler(roomUid) {
         } else {
           sendChatMessage("No active playlist queue to shuffle.", roomUid);
         }
+        return;
+      }
+
+      if (lowerMsg === "!stop" || lowerMsg === "! stop") {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
+          sendChatMessage(`@${senderUsername} you do not have admin permissions to stop playback.`, roomUid);
+          return;
+        }
+        player.stop();
+        sendChatMessage("Playback stopped and playlist queue cleared.", roomUid);
         return;
       }
 
@@ -1154,7 +1028,7 @@ function setupChatHandler(roomUid) {
           return;
         }
 
-        const targetUser = message.slice("!kick_all rooms ".length).trim();
+        const targetUser = message.slice("!kick_all rooms ".length).trim().replace(/^@/, "");
         if (!targetUser) return;
 
         getActivePublicRooms().then(async (rooms) => {
@@ -1194,7 +1068,7 @@ function setupChatHandler(roomUid) {
           return;
         }
 
-        const targetUser = message.slice("!unkick_all rooms ".length).trim();
+        const targetUser = message.slice("!unkick_all rooms ".length).trim().replace(/^@/, "");
         if (!targetUser) return;
 
         getActivePublicRooms().then(async (rooms) => {
@@ -1229,7 +1103,7 @@ function setupChatHandler(roomUid) {
           console.error(`Failed to retrieve active public rooms:`, err.message);
         });
       } else if (message.toLowerCase().startsWith("!kick room ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
@@ -1239,7 +1113,7 @@ function setupChatHandler(roomUid) {
 
         const parts = argsStr.split(/\s+/);
         const targetRoomUid = parts[0];
-        const targetUser = parts[1];
+        const targetUser = (parts[1] || "").replace(/^@/, "").trim();
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
@@ -1253,12 +1127,12 @@ function setupChatHandler(roomUid) {
 
         emitKickUserForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!kick ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
-        const targetUser = message.slice("!kick ".length).trim();
+        const targetUser = message.slice("!kick ".length).trim().replace(/^@/, "");
         if (!targetUser) return;
 
         // Protection: Only room owner can kick allowed admins
@@ -1269,7 +1143,7 @@ function setupChatHandler(roomUid) {
 
         emitKickUserForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unkick room ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
@@ -1279,18 +1153,18 @@ function setupChatHandler(roomUid) {
 
         const parts = argsStr.split(/\s+/);
         const targetRoomUid = parts[0];
-        const targetUser = parts[1];
+        const targetUser = (parts[1] || "").replace(/^@/, "").trim();
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
         emitKickUserForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase().startsWith("!unkick ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
-        const targetUser = message.slice("!unkick ".length).trim();
+        const targetUser = message.slice("!unkick ".length).trim().replace(/^@/, "");
         if (!targetUser) return;
 
         emitKickUserForRoom(roomUid, targetUser, false);
@@ -1320,11 +1194,21 @@ function setupChatHandler(roomUid) {
 
           const kicked = details.kicked || [];
           if (kicked.length === 0) {
-            sendChatMessage(`Kicked List (${details.roomName || targetRoomUid}): No users currently kicked.`, roomUid);
+            sendChatMessage(`╭── 👢 KICKED USERS ──╮\n│\n│ (No users currently kicked)\n╰─────────────────────╯`, roomUid);
           } else {
-            const listStr = kicked.slice(0, 30).map((u, i) => `${i + 1}. ${u}`).join("\n");
-            const more = kicked.length > 30 ? `\n...and ${kicked.length - 30} more` : "";
-            sendChatMessage(`Kicked Users in ${details.roomName || targetRoomUid} [${kicked.length}]:\n${listStr}${more}`, roomUid);
+            let lines = [
+              `╭── 👢 KICKED USERS [${kicked.length}] ──╮`,
+              "│"
+            ];
+            kicked.slice(0, 20).forEach((u, i) => {
+              lines.push(`│ ${i + 1}. ${u}`);
+            });
+            if (kicked.length > 20) {
+              lines.push(`│ ...and ${kicked.length - 20} more`);
+            }
+            lines.push("│");
+            lines.push("╰─────────────────────────╯");
+            sendChatMessage(lines.join("\n"), roomUid);
           }
         } catch (err) {
           console.error(`Failed to fetch kick list for ${targetRoomUid}:`, err.message);
@@ -1348,27 +1232,36 @@ function setupChatHandler(roomUid) {
         }
         pendingLockEjections.clear();
         sendChatMessage("Room is now UNLOCKED. Everyone can now enter!", roomUid);
-      } else if (lowerMsg === "!a_users" || lowerMsg === "!ausers") {
-        if (!isAllowedAdminUser(senderUsername)) {
+      } else if (lowerMsg === "!auth list" || lowerMsg === "!auth_list" || lowerMsg === "!a_users" || lowerMsg === "!ausers") {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
         const users = loadAllowedUsers();
         const lockStatus = isRoomLocked() ? "LOCKED" : "UNLOCKED";
+        let lines = [
+          `╭── 🛡️ AUTH USERS [${lockStatus}] ──╮`,
+          " "
+        ];
         if (users.length === 0) {
-          sendChatMessage(`Authorized Users [Room: ${lockStatus}]: No authorized users listed.`, roomUid);
+          lines.push("  (No authorized users listed)");
         } else {
-          const listStr = users.map((u, i) => `${i + 1}. @${u}`).join("\n");
-          sendChatMessage(`Authorized Users [Room: ${lockStatus}] (${users.length}):\n${listStr}`, roomUid);
+          users.forEach((u, i) => {
+            lines.push(`  ${i + 1}. @${u}`);
+          });
         }
-      } else if (lowerMsg.startsWith("!a_user ") || lowerMsg.startsWith("!auser ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        lines.push(" ");
+        lines.push(`  Total: ${users.length} authorized`);
+        lines.push("╰────────────────────────╯");
+        sendChatMessage(lines.join("\n"), roomUid);
+      } else if (lowerMsg.startsWith("!auth ") || lowerMsg.startsWith("!a_user ") || lowerMsg.startsWith("!auser ")) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
-        const target = message.replace(/^!(a_user|auser)\s+/i, "").trim().replace(/^@/, "");
+        const target = message.replace(/^!(auth|a_user|auser)\s+/i, "").trim().replace(/^@/, "");
         if (!target) {
-          sendChatMessage("Usage: !a_user <username>", roomUid);
+          sendChatMessage("Usage: !auth [user]", roomUid);
           return;
         }
         const added = await addAllowedUser(target, roomUid);
@@ -1377,14 +1270,14 @@ function setupChatHandler(roomUid) {
         } else {
           sendChatMessage(`@${target} is already in the authorized users list.`, roomUid);
         }
-      } else if (lowerMsg.startsWith("!un_user ") || lowerMsg.startsWith("!uauser ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+      } else if (lowerMsg.startsWith("!unauth ") || lowerMsg.startsWith("!un_user ") || lowerMsg.startsWith("!uauser ")) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
-        const target = message.replace(/^!(un_user|uauser)\s+/i, "").trim().replace(/^@/, "");
+        const target = message.replace(/^!(unauth|un_user|uauser)\s+/i, "").trim().replace(/^@/, "");
         if (!target) {
-          sendChatMessage("Usage: !un_user <username>", roomUid);
+          sendChatMessage("Usage: !unauth [user]", roomUid);
           return;
         }
         if (target.toLowerCase() === OWNER_USERNAME.toLowerCase()) {
@@ -1398,7 +1291,7 @@ function setupChatHandler(roomUid) {
           sendChatMessage(`@${target} was not found in authorized users list.`, roomUid);
         }
       } else if (message.toLowerCase().startsWith("!admin room ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
@@ -1408,26 +1301,26 @@ function setupChatHandler(roomUid) {
 
         const parts = argsStr.split(/\s+/);
         const targetRoomUid = parts[0];
-        const targetUser = parts[1] ? parts[1] : senderUsername;
+        const targetUser = parts[1] ? parts[1].replace(/^@/, "").trim() : senderUsername;
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
         emitAddAdminForRoom(targetRoomUid, targetUser, true);
       } else if (message.toLowerCase() === "!admin" || message.toLowerCase().startsWith("!admin ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
         const targetUser = message.toLowerCase() === "!admin"
           ? senderUsername
-          : message.slice("!admin ".length).trim();
+          : message.slice("!admin ".length).trim().replace(/^@/, "");
 
         if (!targetUser || targetUser === "someone") return;
 
         emitAddAdminForRoom(roomUid, targetUser, true);
       } else if (message.toLowerCase().startsWith("!unadmin room ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
@@ -1437,7 +1330,7 @@ function setupChatHandler(roomUid) {
 
         const parts = argsStr.split(/\s+/);
         const targetRoomUid = parts[0];
-        const targetUser = parts[1] ? parts[1] : senderUsername;
+        const targetUser = parts[1] ? parts[1].replace(/^@/, "").trim() : senderUsername;
 
         if (!targetRoomUid || !targetUser || targetUser === "someone") return;
 
@@ -1449,14 +1342,14 @@ function setupChatHandler(roomUid) {
 
         emitAddAdminForRoom(targetRoomUid, targetUser, false);
       } else if (message.toLowerCase() === "!unadmin" || message.toLowerCase().startsWith("!unadmin ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
         const targetUser = message.toLowerCase() === "!unadmin"
           ? senderUsername
-          : message.slice("!unadmin ".length).trim();
+          : message.slice("!unadmin ".length).trim().replace(/^@/, "");
 
         if (!targetUser || targetUser === "someone") return;
 
@@ -1481,13 +1374,17 @@ function setupChatHandler(roomUid) {
         }
 
         if (!targetUser) return;
-        const normalizedTarget = targetUser.toLowerCase().trim();
+        const normalizedTarget = targetUser.replace(/^@/, "").toLowerCase().trim();
 
         const currentAdminsList = loadAllowedAdmins();
-        if (currentAdminsList.includes(normalizedTarget)) return;
+        if (currentAdminsList.includes(normalizedTarget)) {
+          sendChatMessage(`@${normalizedTarget} is already an allowed admin.`, roomUid);
+          return;
+        }
 
         currentAdminsList.push(normalizedTarget);
-        saveAllowedAdminsAndSync(currentAdminsList, roomUid);
+        await saveAllowedAdminsAndSync(currentAdminsList, roomUid);
+        sendChatMessage(`Added @${normalizedTarget} to allowed admins.`, roomUid);
       } else if (message.toLowerCase().startsWith("!revoke ") || message.toLowerCase().startsWith("! revoke ")) {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
           sendChatMessage(`@${senderUsername} only the owner can use !revoke.`, roomUid);
@@ -1502,13 +1399,17 @@ function setupChatHandler(roomUid) {
         }
 
         if (!targetUser) return;
-        const normalizedTarget = targetUser.toLowerCase().trim();
+        const normalizedTarget = targetUser.replace(/^@/, "").toLowerCase().trim();
 
         const currentAdminsList = loadAllowedAdmins();
-        if (!currentAdminsList.includes(normalizedTarget)) return;
+        if (!currentAdminsList.includes(normalizedTarget)) {
+          sendChatMessage(`@${normalizedTarget} is not in the allowed admins list.`, roomUid);
+          return;
+        }
 
         const updatedAdmins = currentAdminsList.filter(u => u !== normalizedTarget);
-        saveAllowedAdminsAndSync(updatedAdmins, roomUid);
+        await saveAllowedAdminsAndSync(updatedAdmins, roomUid);
+        sendChatMessage(`Removed @${normalizedTarget} from allowed admins.`, roomUid);
       } else if (message.toLowerCase() === "!allowed" || message.toLowerCase() === "! allowed") {
         if (senderUsername.toLowerCase().trim() !== OWNER_USERNAME.toLowerCase().trim()) {
           sendChatMessage(`@${senderUsername} only the owner can use !allowed.`, roomUid);
@@ -1516,12 +1417,20 @@ function setupChatHandler(roomUid) {
         }
 
         const list = loadAllowedAdmins();
+        let lines = [
+          "╭── 👑 ALLOWED ADMINS ──╮",
+          "│"
+        ];
         if (list.length === 0) {
-          sendChatMessage(`No users have allowed admin permissions except the room owner (@${OWNER_USERNAME}).`, roomUid);
+          lines.push(`│ (No users except @${OWNER_USERNAME})`);
         } else {
-          const listStr = list.map(u => `@${u}`).join(", ");
-          sendChatMessage(`Allowed users: ${listStr}`, roomUid);
+          list.forEach((u) => {
+            lines.push(`│ • @${u}`);
+          });
         }
+        lines.push("│");
+        lines.push("╰───────────────────────╯");
+        sendChatMessage(lines.join("\n"), roomUid);
 
       } else {
         // If it is NOT a command, and NOT the bot's own message, save it to history
