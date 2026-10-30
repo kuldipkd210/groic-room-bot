@@ -1,12 +1,7 @@
 module.exports = {
-  USER_ID: "ZD8n4XeV1Ad3R9EgyRa5ASa8S8s1",
   OWNER_USERNAME: "kd_zoro",
   BOT_NAME: "xaix",
   BOT_IMAGE_URL: "https://i.ibb.co/wNVgfQRK/fgdsgf.jpg",
-  ROOM_NAME: "Wolf in the North",
-  ROOM_DESC: "The North Remembers.",
-  ROOM_GENRE: ["Classical", "Popular"],
-  MAX_PARTICIPANTS: 50,
   ROOM_FILE: "room.json",
 
   OWNER_NOTIFY_TRIGGERS: [
@@ -32,14 +27,25 @@ module.exports = {
   NOTIFY_COOLDOWN_MS: 60000, // 1 minute (60 seconds) between phone alerts
 
   // Spotify default playlist (can also be set via SPOTIFY_PLAYLIST_URL in .env)
-  DEFAULT_SPOTIFY_PLAYLIST:
-    process.env.SPOTIFY_PLAYLIST_URL ||
-    "https://open.spotify.com/playlist/4PzvrgzKxotDakMn5v4QCG?si=n8syYPnDQFCZI1CyrS1JrQ",
+  DEFAULT_SPOTIFY_PLAYLIST: process.env.SPOTIFY_PLAYLIST_URL || "",
 
-  // Hardcoded default playlists
-  DEFAULT_PLAYLISTS: {
-    soft: "https://open.spotify.com/playlist/4PzvrgzKxotDakMn5v4QCG?si=n8syYPnDQFCZI1CyrS1JrQ",
-    v2: "https://open.spotify.com/playlist/57R2ymQ9Ulb3c7AR92XBvk?si=E132XELtT_qyU5M3ogp1QA"
-  }
+  // Hardcoded default playlists (empty by default; managed manually via bot commands)
+  DEFAULT_PLAYLISTS: {},
+
+  // Hardcoded default allowed admins (always permitted, synced with Pantry 'allowed_admins')
+  DEFAULT_ALLOWED_ADMINS: [
+    "kd_zoro",
+    "_its_shru_",
+    "dedsec_404",
+    "_kevin_11_"
+  ],
+
+  // Hardcoded default allowed users (always permitted, synced with Pantry 'allowed_users')
+  DEFAULT_ALLOWED_USERS: [
+    "kd_zoro",
+    "_its_shru_",
+    "dedsec_404",
+    "_kevin_11_"
+  ]
 };
 

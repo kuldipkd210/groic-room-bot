@@ -230,7 +230,24 @@ function toGroicPlaylistItem(song, isPlaying = false) {
   };
 }
 
+/**
+ * Looks up a cached track by its YouTube video ID or URL.
+ */
+function findCachedTrackByVideoId(urlOrId) {
+  if (!urlOrId || typeof urlOrId !== "string") return null;
+  const match = urlOrId.trim().match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+  const targetId = match ? match[1] : (urlOrId.trim().length === 11 ? urlOrId.trim() : urlOrId.trim());
+
+  for (const song of trackCache.values()) {
+    if (song && (song.songurl === targetId || song.songurl === urlOrId)) {
+      return song;
+    }
+  }
+  return null;
+}
+
 module.exports = {
   resolveTrackToYouTube,
-  toGroicPlaylistItem
+  toGroicPlaylistItem,
+  findCachedTrackByVideoId
 };

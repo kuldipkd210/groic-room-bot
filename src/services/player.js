@@ -1,6 +1,6 @@
 const { emit } = require("../socket");
 const { getSpotifyTracks } = require("./spotify");
-const { resolveTrackToYouTube, toGroicPlaylistItem } = require("./youtube");
+const { resolveTrackToYouTube, toGroicPlaylistItem, findCachedTrackByVideoId } = require("./youtube");
 
 class MusicPlayer {
   constructor() {
@@ -274,7 +274,6 @@ class MusicPlayer {
    */
   stop() {
     this.clearAdvanceTimer();
-    const wasPlaying = this.isPlaying;
     this.isPlaying = false;
     this.isPaused = false;
     this.currentSong = null;
@@ -282,10 +281,65 @@ class MusicPlayer {
     this.currentIndex = -1;
     this.resolvedCache.clear();
 
-    if (wasPlaying) {
-      console.log("[MusicPlayer] Playback stopped and queue cleared");
-      emit("playbackAction", 0);
+    console.log("[MusicPlayer] Playback stopped");
+    emit("playbackAction", 0);
+  }
+
+  /**
+   * Checks if an incoming song corresponds to an item in the active playlist.
+   * Compares:
+   * 1. Extracted video ID in resolvedCache
+   * 2. Extracted video ID in YouTube trackCache
+   * 3. Normalized title and artist match against playlist tracks
+   */
+  findTrackIndexInPlaylist(data) {
+    if (!this.playlist || this.playlist.length === 0 || !data) return -1;
+
+    const incomingUrl = (data.songurl || "").trim();
+    const incomingMatch = incomingUrl.match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/);
+    const incomingVideoId = incomingMatch ? incomingMatch[1] : (incomingUrl.length === 11 ? incomingUrl : incomingUrl);
+
+    const cleanIncomingTitle = (data.title || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+    const cleanIncomingArtist = (data.artist || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+
+    // 1. Direct check in resolvedCache
+    for (const [idx, song] of this.resolvedCache.entries()) {
+      if (!song) continue;
+      const cachedVideoId = (song.songurl || "").match(/(?:youtu\.be\/|youtube\.com\/(?:embed\/|v\/|watch\?v=|watch\?.+&v=))([\w-]{11})/)?.[1] || song.songurl;
+      if (incomingVideoId && cachedVideoId && incomingVideoId === cachedVideoId) {
+        return idx;
+      }
     }
+
+    // 2. Check in YouTube trackCache
+    const fromYtCache = findCachedTrackByVideoId(incomingUrl);
+    if (fromYtCache) {
+      const ytTitle = (fromYtCache.title || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+      for (let i = 0; i < this.playlist.length; i++) {
+        const item = this.playlist[i];
+        const pTitle = (item.title || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+        if (pTitle && ytTitle && (pTitle.includes(ytTitle) || ytTitle.includes(pTitle))) {
+          return i;
+        }
+      }
+    }
+
+    // 3. Match by Title & Artist against playlist items
+    if (cleanIncomingTitle) {
+      for (let i = 0; i < this.playlist.length; i++) {
+        const item = this.playlist[i];
+        const pTitle = (item.title || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+        const pArtist = (item.artist || "").toLowerCase().replace(/[^\w\s]/g, "").trim();
+
+        if (pTitle === cleanIncomingTitle || (pTitle.length > 5 && cleanIncomingTitle.includes(pTitle)) || (cleanIncomingTitle.length > 5 && pTitle.includes(cleanIncomingTitle))) {
+          if (!cleanIncomingArtist || !pArtist || cleanIncomingArtist.includes(pArtist) || pArtist.includes(cleanIncomingArtist)) {
+            return i;
+          }
+        }
+      }
+    }
+
+    return -1;
   }
 
   /**
@@ -294,47 +348,83 @@ class MusicPlayer {
   handlePlaybackUpdate(data) {
     if (!data) return;
 
+    // Handle Pause
     if (data.action === 0) {
       this.isPaused = true;
       this.clearAdvanceTimer();
-    } else if (data.action === 1) {
+      console.log("[MusicPlayer] Playback paused in room.");
+      return;
+    }
+
+    // Handle Resume
+    if (data.action === 1 && this.isPaused) {
       this.isPaused = false;
+      console.log("[MusicPlayer] Playback resumed in room.");
+      if (this.currentSong && this.isPlaying) {
+        const totalDuration = this.currentSong.duration || 200;
+        const currentPosSec = typeof data.currentTime === "number" && data.currentTime > 0 ? data.currentTime : 0;
+        const remainingSec = Math.max(5, totalDuration - currentPosSec);
+        this.scheduleAutoAdvance(remainingSec);
+      }
     }
 
     // If a different song is playing in the room, track it
     if (data.songurl && (!this.currentSong || this.currentSong.songurl !== data.songurl)) {
-      console.log(`[MusicPlayer] External playback change detected: "${data.title}" (${data.songurl})`);
+      console.log(`[MusicPlayer] Song change detected in room: "${data.title}" (${data.songurl})`);
 
-      // Check if this song corresponds to an item in our current playlist queue
-      const matchedIdx = this.playlist.findIndex((t, idx) => {
-        const r = this.resolvedCache.get(idx);
-        return r && r.songurl === data.songurl;
-      });
+      const matchedIdx = this.findTrackIndexInPlaylist(data);
 
       if (matchedIdx !== -1) {
-        console.log(`[MusicPlayer] User clicked track ${matchedIdx + 1} in queue: "${this.playlist[matchedIdx].title}"`);
+        // The song was selected from the active playlist queue!
+        console.log(`[MusicPlayer] Song from playlist queue selected: track ${matchedIdx + 1}/${this.playlist.length} ("${this.playlist[matchedIdx].title}"). Continuing playlist monitoring!`);
         this.currentIndex = matchedIdx;
-        this.currentSong = this.resolvedCache.get(matchedIdx);
+
+        let song = this.resolvedCache.get(matchedIdx);
+        if (!song) {
+          song = {
+            songurl: data.songurl,
+            title: data.title || this.playlist[matchedIdx].title,
+            artist: data.artist || this.playlist[matchedIdx].artist,
+            duration: data.duration || this.playlist[matchedIdx].durationSec || 200,
+            imageurl: data.imageurl || "",
+            imageurlhigh: data.imageurlhigh || "",
+            youtubePlayer: true,
+            action: 1
+          };
+          this.resolvedCache.set(matchedIdx, song);
+        }
+
+        this.currentSong = song;
         this.isPlaying = true;
         this.isPaused = false;
         this.playbackStartTime = Date.now();
         this.pausedElapsedSeconds = 0;
-        this.scheduleAutoAdvance(this.currentSong.duration || 200);
+
+        const durationSec = data.duration || song.duration || this.playlist[matchedIdx].durationSec || 200;
+        const currentPosSec = (typeof data.currentTime === "number" && data.currentTime > 0) ? data.currentTime : 0;
+        const remainingSec = Math.max(10, durationSec - currentPosSec);
+
+        // Continue playing: schedule auto-advancing to the next song in the playlist when this ends
+        this.scheduleAutoAdvance(remainingSec);
+
+        // Keep room UP NEXT queue synced from this new track
+        this.emitRoomPlaylist();
         return;
       }
 
+      // The song is NOT part of the playlist (someone searched and played a separate song)
+      console.log(`[MusicPlayer] External song NOT in playlist detected: "${data.title}". Stopping playlist monitoring.`);
+      this.clearAdvanceTimer();
+      this.isPlaying = false;
       this.currentSong = {
         songurl: data.songurl,
-        title: data.title || "Track",
+        title: data.title || "External Track",
         artist: data.artist || "Unknown",
         imageurl: data.imageurl || "",
         imageurlhigh: data.imageurlhigh || "",
         youtubePlayer: true,
         action: data.action !== undefined ? data.action : 1
       };
-      this.isPlaying = true;
-      // Do not fight with external playback; if duration unknown, don't force auto-advance
-      this.clearAdvanceTimer();
     }
   }
 }
