@@ -1,4 +1,4 @@
-const { getSocket, emit, createSocketInstance, fetchRoomState } = require("./socket");
+const { getSocket, emit, createSocketInstance } = require("./socket");
 const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS, DEFAULT_ALLOWED_ADMINS } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
@@ -140,6 +140,7 @@ function getUserStatusObj(username) {
 }
 
 const pendingAutoAdmins = new Set();
+const localKickedUsersByRoom = new Map(); // roomUid -> Set of kicked usernames
 let activeRoomUid = null;
 
 function isAllowedAdminUser(username, userIsAdmin = false) {
@@ -195,6 +196,17 @@ function emitAddAdminForRoom(roomUid, targetUsername, targetIsAdmin) {
 function emitKickUserForRoom(roomUid, targetUsername, isKick) {
   const cleanTarget = (targetUsername || "").replace(/^@/, "").trim();
   if (!cleanTarget) return;
+
+  // Track kicked state locally
+  if (!localKickedUsersByRoom.has(roomUid)) {
+    localKickedUsersByRoom.set(roomUid, new Set());
+  }
+  const kickedSet = localKickedUsersByRoom.get(roomUid);
+  if (isKick) {
+    kickedSet.add(cleanTarget.toLowerCase());
+  } else {
+    kickedSet.delete(cleanTarget.toLowerCase());
+  }
 
   if (roomUid === activeRoomUid) {
     const mainSocket = getSocket();
@@ -434,6 +446,18 @@ function startUserJoinWatcher(roomUid) {
   socket.on("presenceUpdate", (data) => {
     const activeUsers = data?.activeUsers || [];
     currentAdmins = data?.admins || [];
+
+    if (Array.isArray(data?.kicked)) {
+      if (!localKickedUsersByRoom.has(roomUid)) {
+        localKickedUsersByRoom.set(roomUid, new Set());
+      }
+      const set = localKickedUsersByRoom.get(roomUid);
+      data.kicked.forEach((u) => {
+        const name = typeof u === "string" ? u : (u?.username || u?.name);
+        if (name) set.add(name.toLowerCase());
+      });
+    }
+
     processUserList(activeUsers, roomUid);
     if (!initialized) initialized = true;
   });
@@ -485,14 +509,26 @@ function setupChatHandler(roomUid) {
   player.setRoomUid(roomUid);
   player.setChatNotifier(sendChatMessage);
 
-  // Sync allowed admins, playlists, and allowed users from cloud sequentially
+  // Sync allowed admins, playlists, and allowed users from cloud sequentially, and seed kicked users
   (async () => {
     try {
       await syncAllowedAdminsFromCloud(roomUid);
       await syncPlaylistsFromCloud();
       await syncAllowedUsersFromCloud(roomUid);
+
+      const details = await getRoomDetails(roomUid);
+      if (details && Array.isArray(details.kicked)) {
+        if (!localKickedUsersByRoom.has(roomUid)) {
+          localKickedUsersByRoom.set(roomUid, new Set());
+        }
+        const set = localKickedUsersByRoom.get(roomUid);
+        details.kicked.forEach((u) => {
+          const name = typeof u === "string" ? u : (u?.username || u?.name);
+          if (name) set.add(name.toLowerCase());
+        });
+      }
     } catch (err) {
-      console.error("[Handlers] Error during initial cloud sync:", err.message);
+      console.error("[Handlers] Error during initial room sync:", err.message);
     }
   })();
 
@@ -877,14 +913,14 @@ function setupChatHandler(roomUid) {
         sendChatMessage(`Fetching details for playlist "${shortName}"...`, roomUid);
         try {
           const info = await getSpotifyTracks(playlistUrl);
-          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const saved = await addSavedPlaylist(shortName, playlistUrl, senderUsername);
           const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
             `Saved "${saved.name}" (${info.trackCount} tracks)!\n${syncStatus}. Play with: !pl play ${saved.name}`,
             roomUid
           );
         } catch (err) {
-          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const saved = await addSavedPlaylist(shortName, playlistUrl, senderUsername);
           const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
             `Saved playlist "${saved.name}"!\n${syncStatus}. Play with: !pl play ${saved.name}`,
@@ -1168,13 +1204,13 @@ function setupChatHandler(roomUid) {
         if (!targetUser) return;
 
         emitKickUserForRoom(roomUid, targetUser, false);
-      } else if (message.toLowerCase() === "!klist" || message.toLowerCase().startsWith("!klist ")) {
-        if (!isAllowedAdminUser(senderUsername)) {
+      } else if (message.toLowerCase() === "!klist" || message.toLowerCase().startsWith("!klist ") || message.toLowerCase().startsWith("! klist")) {
+        if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
         }
 
-        const argsStr = message.slice("!klist".length).trim();
+        const argsStr = message.replace(/^!\s*klist/i, "").trim();
         let targetRoomUid = roomUid;
         if (argsStr) {
           const parts = argsStr.split(/\s+/);
@@ -1186,27 +1222,43 @@ function setupChatHandler(roomUid) {
         }
 
         try {
-          const details = await fetchRoomState(targetRoomUid);
-          if (!details) {
-            sendChatMessage(`Room ${targetRoomUid} not found or inaccessible.`, roomUid);
-            return;
+          const kickedUsersMap = new Set();
+
+          // 1. Gather any locally tracked kicked users for this room
+          if (localKickedUsersByRoom.has(targetRoomUid)) {
+            for (const u of localKickedUsersByRoom.get(targetRoomUid)) {
+              if (u) kickedUsersMap.add(u);
+            }
           }
 
-          const kicked = details.kicked || [];
+          // 2. Fetch fresh room state from Groic REST API
+          try {
+            const details = await getRoomDetails(targetRoomUid);
+            if (details && Array.isArray(details.kicked)) {
+              details.kicked.forEach((u) => {
+                const name = typeof u === "string" ? u : (u?.username || u?.name);
+                if (name) kickedUsersMap.add(name.toLowerCase());
+              });
+            }
+          } catch (apiErr) {
+            console.error(`[Handlers] API fetch error in !klist for ${targetRoomUid}:`, apiErr.message);
+          }
+
+          const kicked = Array.from(kickedUsersMap);
           if (kicked.length === 0) {
-            sendChatMessage(`╭── 👢 KICKED USERS ──╮\n│\n│ (No users currently kicked)\n╰─────────────────────╯`, roomUid);
+            sendChatMessage("╭──  KICKED USERS ──╮\n \n  (No users currently kicked)\n╰─────────────────────╯", roomUid);
           } else {
             let lines = [
-              `╭── 👢 KICKED USERS [${kicked.length}] ──╮`,
-              "│"
+              `╭──  KICKED USERS [${kicked.length}] ──╮`,
+              " "
             ];
-            kicked.slice(0, 20).forEach((u, i) => {
-              lines.push(`│ ${i + 1}. ${u}`);
+            kicked.slice(0, 25).forEach((u, i) => {
+              lines.push(`  ${i + 1}. @${u}`);
             });
-            if (kicked.length > 20) {
-              lines.push(`│ ...and ${kicked.length - 20} more`);
+            if (kicked.length > 25) {
+              lines.push(`  ...and ${kicked.length - 25} more`);
             }
-            lines.push("│");
+            lines.push(" ");
             lines.push("╰─────────────────────────╯");
             sendChatMessage(lines.join("\n"), roomUid);
           }
