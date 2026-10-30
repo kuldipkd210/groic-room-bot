@@ -877,14 +877,14 @@ function setupChatHandler(roomUid) {
         sendChatMessage(`Fetching details for playlist "${shortName}"...`, roomUid);
         try {
           const info = await getSpotifyTracks(playlistUrl);
-          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const saved = await addSavedPlaylist(shortName, playlistUrl, senderUsername);
           const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
             `Saved "${saved.name}" (${info.trackCount} tracks)!\n${syncStatus}. Play with: !pl play ${saved.name}`,
             roomUid
           );
         } catch (err) {
-          const saved = await addSavedPlaylist(shortName, playlistUrl);
+          const saved = await addSavedPlaylist(shortName, playlistUrl, senderUsername);
           const syncStatus = saved.cloudSynced ? "Synced to cloud ☁️" : `Saved locally (Cloud sync: ${saved.cloudError || "check logs"})`;
           sendChatMessage(
             `Saved playlist "${saved.name}"!\n${syncStatus}. Play with: !pl play ${saved.name}`,
