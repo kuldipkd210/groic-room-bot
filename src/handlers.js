@@ -1275,7 +1275,7 @@ function setupChatHandler(roomUid) {
               lines.push(`  ...and ${kicked.length - 25} more`);
             }
             lines.push(" ");
-            lines.push("╰─────────────────────────╯");
+            lines.push("╰────────────────────╯");
             sendChatMessage(lines.join("\n"), roomUid);
           }
         } catch (err) {
