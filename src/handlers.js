@@ -1,4 +1,4 @@
-const { getSocket, emit, createSocketInstance } = require("./socket");
+const { getSocket, emit, createSocketInstance, fetchRoomState } = require("./socket");
 const { BOT_NAME, BOT_IMAGE_URL, OWNER_USERNAME, OWNER_NOTIFY_TRIGGERS, EXPLICIT_CALL_COMMANDS, FRIEND_CALL_COMMANDS, DEFAULT_ALLOWED_ADMINS } = require("../config/constants");
 const { askAi } = require("./ask");
 const { getRoomDetails, getActivePublicRooms } = require("./api");
@@ -509,24 +509,12 @@ function setupChatHandler(roomUid) {
   player.setRoomUid(roomUid);
   player.setChatNotifier(sendChatMessage);
 
-  // Sync allowed admins, playlists, and allowed users from cloud sequentially, and seed kicked users
+  // Sync allowed admins, playlists, and allowed users from cloud sequentially
   (async () => {
     try {
       await syncAllowedAdminsFromCloud(roomUid);
       await syncPlaylistsFromCloud();
       await syncAllowedUsersFromCloud(roomUid);
-
-      const details = await getRoomDetails(roomUid);
-      if (details && Array.isArray(details.kicked)) {
-        if (!localKickedUsersByRoom.has(roomUid)) {
-          localKickedUsersByRoom.set(roomUid, new Set());
-        }
-        const set = localKickedUsersByRoom.get(roomUid);
-        details.kicked.forEach((u) => {
-          const name = typeof u === "string" ? u : (u?.username || u?.name);
-          if (name) set.add(name.toLowerCase());
-        });
-      }
     } catch (err) {
       console.error("[Handlers] Error during initial room sync:", err.message);
     }
@@ -534,6 +522,21 @@ function setupChatHandler(roomUid) {
 
   const socket = getSocket();
   if (socket) {
+    socket.off("roomState");
+    socket.on("roomState", (data) => {
+      if (data && Array.isArray(data.kicked)) {
+        if (!localKickedUsersByRoom.has(roomUid)) {
+          localKickedUsersByRoom.set(roomUid, new Set());
+        }
+        const set = localKickedUsersByRoom.get(roomUid);
+        data.kicked.forEach((u) => {
+          const name = typeof u === "string" ? u : (u?.username || u?.name);
+          if (name) set.add(name.toLowerCase());
+        });
+        console.log(`[Handlers] Cached ${set.size} kicked users for room ${roomUid} from roomState`);
+      }
+    });
+
     socket.off("playbackUpdate");
     socket.on("playbackUpdate", (data) => {
       player.handlePlaybackUpdate(data);
@@ -1212,44 +1215,57 @@ function setupChatHandler(roomUid) {
 
         const argsStr = message.replace(/^!\s*klist/i, "").trim();
         let targetRoomUid = roomUid;
+        const isRemote = Boolean(argsStr);
+
         if (argsStr) {
           const parts = argsStr.split(/\s+/);
-          if (parts[0].toLowerCase() === "room" && parts[1]) {
-            targetRoomUid = parts[1];
-          } else {
-            targetRoomUid = parts[0];
-          }
+          const raw = (parts[0].toLowerCase() === "room" && parts[1]) ? parts[1] : parts[0];
+          const match = raw.match(/([a-zA-Z0-9_-]{4,})/);
+          targetRoomUid = match ? match[1] : raw.trim();
         }
 
         try {
-          const kickedUsersMap = new Set();
+          let kickedUsersSet = null;
 
-          // 1. Gather any locally tracked kicked users for this room
-          if (localKickedUsersByRoom.has(targetRoomUid)) {
-            for (const u of localKickedUsersByRoom.get(targetRoomUid)) {
-              if (u) kickedUsersMap.add(u);
+          // For current active room, use local cache if populated
+          if (targetRoomUid === activeRoomUid && localKickedUsersByRoom.has(targetRoomUid)) {
+            const cached = localKickedUsersByRoom.get(targetRoomUid);
+            if (cached && cached.size > 0) {
+              kickedUsersSet = cached;
             }
           }
 
-          // 2. Fetch fresh room state from Groic REST API
-          try {
-            const details = await getRoomDetails(targetRoomUid);
-            if (details && Array.isArray(details.kicked)) {
-              details.kicked.forEach((u) => {
+          // If querying a remote room or if local tracking is empty, fetch live roomState
+          if (!kickedUsersSet) {
+            const state = await fetchRoomState(targetRoomUid);
+            if (!state) {
+              sendChatMessage(`Room "${targetRoomUid}" not found or inaccessible.`, roomUid);
+              return;
+            }
+            if (Array.isArray(state.kicked)) {
+              if (!localKickedUsersByRoom.has(targetRoomUid)) {
+                localKickedUsersByRoom.set(targetRoomUid, new Set());
+              }
+              const set = localKickedUsersByRoom.get(targetRoomUid);
+              set.clear();
+              state.kicked.forEach((u) => {
                 const name = typeof u === "string" ? u : (u?.username || u?.name);
-                if (name) kickedUsersMap.add(name.toLowerCase());
+                if (name) set.add(name.toLowerCase());
               });
+              kickedUsersSet = set;
             }
-          } catch (apiErr) {
-            console.error(`[Handlers] API fetch error in !klist for ${targetRoomUid}:`, apiErr.message);
           }
 
-          const kicked = Array.from(kickedUsersMap);
+          const kicked = kickedUsersSet ? Array.from(kickedUsersSet) : [];
+          const header = isRemote
+            ? `╭──  KICKED USERS (${targetRoomUid}) [${kicked.length}] ──╮`
+            : `╭──  KICKED USERS [${kicked.length}] ──╮`;
+
           if (kicked.length === 0) {
-            sendChatMessage("╭──  KICKED USERS ──╮\n \n  (No users currently kicked)\n╰─────────────────────╯", roomUid);
+            sendChatMessage(`${header}\n \n  (No users currently kicked)\n╰─────────────────────╯`, roomUid);
           } else {
             let lines = [
-              `╭──  KICKED USERS [${kicked.length}] ──╮`,
+              header,
               " "
             ];
             kicked.slice(0, 25).forEach((u, i) => {
