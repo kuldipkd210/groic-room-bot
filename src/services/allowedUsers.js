@@ -183,7 +183,7 @@ function applyCloudData(data) {
       console.log(`[AllowedUsers] Successfully synced ${fromCloud.length} allowed users from cloud.`);
     }
     if (typeof data.locked === "boolean") {
-      setRoomLocked(data.locked);
+      setRoomLocked(data.locked, null, true);
       console.log(`[AllowedUsers] Synced room lock status from cloud: ${data.locked ? "LOCKED" : "UNLOCKED"}`);
     }
   }
@@ -326,7 +326,7 @@ function isRoomLocked() {
   return roomLocked;
 }
 
-function setRoomLocked(locked, roomUid) {
+function setRoomLocked(locked, roomUid, skipCloudSync = false) {
   roomLocked = Boolean(locked);
   try {
     fs.writeFileSync(LOCK_FILE, JSON.stringify({ locked: roomLocked, updatedAt: new Date().toISOString() }, null, 2), "utf8");
@@ -334,9 +334,11 @@ function setRoomLocked(locked, roomUid) {
     console.error("[AllowedUsers] Failed to save room_lock.json:", err.message);
   }
 
-  const envBlobId = process.env.ALLOWED_USERS_BLOB_ID || process.env.AUTH_USERS_BLOB_ID || process.env.ALLOWED_USER_BLOB_ID;
-  if (roomUid || envBlobId) {
-    saveAllowedUsersAndSync(loadAllowedUsers(), roomUid).catch(() => {});
+  if (!skipCloudSync) {
+    const envBlobId = process.env.ALLOWED_USERS_BLOB_ID || process.env.AUTH_USERS_BLOB_ID || process.env.ALLOWED_USER_BLOB_ID;
+    if (roomUid || envBlobId) {
+      saveAllowedUsersAndSync(loadAllowedUsers(), roomUid).catch(() => {});
+    }
   }
 }
 
