@@ -746,7 +746,7 @@ function setupChatHandler(roomUid) {
           "│ • !unadmin [user] • revoke admin",
           "│ • !kick [user]         • kick user",
           "│ • !unkick [user]    • unkick user",
-          "│ • !klist [roomid]   • kicked list",
+          "│ • !klist                  • kicked list",
           "│ • !look [user]        • find user",
           "│",
           "│ ✦ Security & Defense:",
@@ -761,7 +761,6 @@ function setupChatHandler(roomUid) {
           "│ • !unadmin room [roomUid] [user]",
           "│ • !kick room [roomUid] [user]",
           "│ • !unkick room [roomUid] [user]",
-          "│ • !klist [roomUid] • kicked list",
           "╰───────────────────────╯"
         ].join("\n");
 
@@ -1207,46 +1206,35 @@ function setupChatHandler(roomUid) {
         if (!targetUser) return;
 
         emitKickUserForRoom(roomUid, targetUser, false);
-      } else if (message.toLowerCase() === "!klist" || message.toLowerCase().startsWith("!klist ") || message.toLowerCase().startsWith("! klist")) {
+      } else if (lowerMsg.trim() === "!klist" || lowerMsg.trim() === "! klist") {
         if (!isAllowedAdminUser(senderUsername, senderIsAdmin)) {
           sendChatMessage(`@${senderUsername} you do not have admin permissions.`, roomUid);
           return;
-        }
-
-        const argsStr = message.replace(/^!\s*klist/i, "").trim();
-        let targetRoomUid = roomUid;
-        const isRemote = Boolean(argsStr);
-
-        if (argsStr) {
-          const parts = argsStr.split(/\s+/);
-          const raw = (parts[0].toLowerCase() === "room" && parts[1]) ? parts[1] : parts[0];
-          const match = raw.match(/([a-zA-Z0-9_-]{4,})/);
-          targetRoomUid = match ? match[1] : raw.trim();
         }
 
         try {
           let kickedUsersSet = null;
 
           // For current active room, use local cache if populated
-          if (targetRoomUid === activeRoomUid && localKickedUsersByRoom.has(targetRoomUid)) {
-            const cached = localKickedUsersByRoom.get(targetRoomUid);
+          if (roomUid === activeRoomUid && localKickedUsersByRoom.has(roomUid)) {
+            const cached = localKickedUsersByRoom.get(roomUid);
             if (cached && cached.size > 0) {
               kickedUsersSet = cached;
             }
           }
 
-          // If querying a remote room or if local tracking is empty, fetch live roomState
+          // If local tracking is empty, fetch live roomState
           if (!kickedUsersSet) {
-            const state = await fetchRoomState(targetRoomUid);
+            const state = await fetchRoomState(roomUid);
             if (!state) {
-              sendChatMessage(`Room "${targetRoomUid}" not found or inaccessible.`, roomUid);
+              sendChatMessage(`Room "${roomUid}" not found or inaccessible.`, roomUid);
               return;
             }
             if (Array.isArray(state.kicked)) {
-              if (!localKickedUsersByRoom.has(targetRoomUid)) {
-                localKickedUsersByRoom.set(targetRoomUid, new Set());
+              if (!localKickedUsersByRoom.has(roomUid)) {
+                localKickedUsersByRoom.set(roomUid, new Set());
               }
-              const set = localKickedUsersByRoom.get(targetRoomUid);
+              const set = localKickedUsersByRoom.get(roomUid);
               set.clear();
               state.kicked.forEach((u) => {
                 const name = typeof u === "string" ? u : (u?.username || u?.name);
@@ -1257,9 +1245,7 @@ function setupChatHandler(roomUid) {
           }
 
           const kicked = kickedUsersSet ? Array.from(kickedUsersSet) : [];
-          const header = isRemote
-            ? `╭──  KICKED USERS (${targetRoomUid}) [${kicked.length}] ──╮`
-            : `╭──  KICKED USERS [${kicked.length}] ──╮`;
+          const header = `╭──  KICKED USERS [${kicked.length}] ──╮`;
 
           if (kicked.length === 0) {
             sendChatMessage(`${header}\n \n  (No users currently kicked)\n╰─────────────────────╯`, roomUid);
@@ -1275,12 +1261,12 @@ function setupChatHandler(roomUid) {
               lines.push(`  ...and ${kicked.length - 25} more`);
             }
             lines.push(" ");
-            lines.push("╰─────────────────────────╯");
+            lines.push("╰────────────────────╯");
             sendChatMessage(lines.join("\n"), roomUid);
           }
         } catch (err) {
-          console.error(`Failed to fetch kick list for ${targetRoomUid}:`, err.message);
-          sendChatMessage(`Failed to retrieve kicked list for ${targetRoomUid}.`, roomUid);
+          console.error(`Failed to fetch kick list for ${roomUid}:`, err.message);
+          sendChatMessage(`Failed to retrieve kicked list.`, roomUid);
         }
       } else if (lowerMsg === "!lock") {
         if (!isAllowedAdminUser(senderUsername)) {
@@ -1497,7 +1483,7 @@ function setupChatHandler(roomUid) {
           });
         }
         lines.push("│");
-        lines.push("╰───────────────────────╯");
+        lines.push("╰─────────────────────╯");
         sendChatMessage(lines.join("\n"), roomUid);
 
       } else {
